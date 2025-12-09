@@ -113,7 +113,7 @@ backend:
       speculative-algorithm: "EAGLE"
       speculative-num-steps: 2
       speculative-eagle-topk: 1
-      speculative-num-draft-tokens: 3 
+      speculative-num-draft-tokens: 3
 
 benchmark:
   type: "sa-bench"
