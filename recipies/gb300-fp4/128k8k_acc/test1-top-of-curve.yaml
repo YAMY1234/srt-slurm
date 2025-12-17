@@ -3,7 +3,7 @@ name: "gb300-fp4-128k8k-acc-test1-top-of-curve"
 
 model:
   path: "dsfp4"
-  container: "dev-1212"
+  container: "yamy-1215"
   precision: "fp4"
 
 # extra_mount: ["/home/yangminl/sglang:/sgl-workspace/sglang", "/home/yangminl/flashinfer:/sgl-workspace/files/flashinfer"]
@@ -21,9 +21,7 @@ backend:
   decode_environment:
     DYN_SKIP_SGLANG_LOG_FORMATTING: '1'
     FLASHINFER_DISABLE_VERSION_CHECK: '1'
-    # Use per-job cache to avoid concurrent JIT compilation conflicts
-    # SLURM_JOB_ID ensures each job has its own cache directory
-    FLASHINFER_WORKSPACE_BASE: /configs/flashinfer-cache/${SLURM_JOB_ID}_${HOSTNAME}
+    FLASHINFER_WORKSPACE_BASE: /tmp/flashinfer-cache
     MC_FORCE_MNNVL: '1'
     NCCL_CUMEM_ENABLE: '1'
     NCCL_MNNVL_ENABLE: '1'
@@ -42,9 +40,7 @@ backend:
   prefill_environment:
     DYN_SKIP_SGLANG_LOG_FORMATTING: '1'
     FLASHINFER_DISABLE_VERSION_CHECK: '1'
-    # Use per-job cache to avoid concurrent JIT compilation conflicts
-    # SLURM_JOB_ID ensures each job has its own cache directory
-    FLASHINFER_WORKSPACE_BASE: /configs/flashinfer-cache/${SLURM_JOB_ID}_${HOSTNAME}
+    FLASHINFER_WORKSPACE_BASE: /tmp/flashinfer-cache
     MC_FORCE_MNNVL: '1'
     NCCL_CUMEM_ENABLE: '1'
     NCCL_MNNVL_ENABLE: '1'
@@ -116,4 +112,4 @@ backend:
       watchdog-timeout: 1000000
 
 benchmark:
-  type: "gpqa"
+  type: "longbenchv2"
