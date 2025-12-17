@@ -7,7 +7,7 @@ model:
   container: "dev-1212"
   precision: "fp4"
 
-extra_mount: ["/home/yangminl/sglang:/sgl-workspace/sglang", "/home/yangminl/flashinfer:/sgl-workspace/files/flashinfer"]
+# extra_mount: ["/home/yangminl/sglang:/sgl-workspace/sglang", "/home/yangminl/flashinfer:/sgl-workspace/files/flashinfer"]
 
 resources:
   gpu_type: "gb300"

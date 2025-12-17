@@ -6,7 +6,7 @@ model:
   container: "dev-1212"
   precision: "fp4"
 
-extra_mount: ["/home/yangminl/sglang:/sgl-workspace/sglang", "/home/yangminl/flashinfer:/sgl-workspace/files/flashinfer", "/home/yangminl/.cache/huggingface:/root/.cache/huggingface"]
+# extra_mount: ["/home/yangminl/sglang:/sgl-workspace/sglang", "/home/yangminl/flashinfer:/sgl-workspace/files/flashinfer", "/home/yangminl/.cache/huggingface:/root/.cache/huggingface"]
 
 resources:
   decode_nodes: 2
