@@ -4,10 +4,20 @@
 
 # LongBench-v2 evaluation script using sglang.test.run_eval
 
+# Set HF_TOKEN to avoid rate limiting when downloading tokenizer
+# You can override this by setting HF_TOKEN environment variable before running
+if [ -z "$HF_TOKEN" ]; then
+    # Default token - replace with your own or set HF_TOKEN env var
+    export HF_TOKEN="${HF_TOKEN:-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}"
+    echo "Warning: HF_TOKEN not set. Using default token. Set HF_TOKEN env var to use your own."
+fi
+export HUGGING_FACE_HUB_TOKEN="$HF_TOKEN"
+
 head_node="localhost"
 head_port=8000
-# Use local model path in container for tokenizer loading (avoids HF Hub download)
-model_name="${MODEL_NAME:-/model/}"  # Default to container's mounted model path
+# Model name must match served-model-name in sglang config
+# Use MODEL_NAME env var if set, otherwise default to nvidia FP4 model
+model_name="${MODEL_NAME:-nvidia/DeepSeek-R1-0528-NVFP4-v2}"
 
 # Parse arguments from SLURM job
 n_prefill=$1
