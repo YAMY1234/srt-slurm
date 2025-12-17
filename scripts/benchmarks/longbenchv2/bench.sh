@@ -6,7 +6,8 @@
 
 head_node="localhost"
 head_port=8000
-model_name="nvidia/DeepSeek-R1-0528-NVFP4-v2"  # Default model name
+# Use local model path in container for tokenizer loading (avoids HF Hub download)
+model_name="${MODEL_NAME:-/model/}"  # Default to container's mounted model path
 
 # Parse arguments from SLURM job
 n_prefill=$1
