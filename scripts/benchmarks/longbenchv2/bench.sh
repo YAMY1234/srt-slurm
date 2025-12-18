@@ -11,11 +11,14 @@ model_name="nvidia/DeepSeek-R1-0528-NVFP4-v2"  # Default model name
 # Parse arguments from SLURM job
 n_prefill=$1
 n_decode=$2
+# prefill_gpus and decode_gpus are parsed for argument position consistency with other benchmarks
+# shellcheck disable=SC2034
 prefill_gpus=$3
+# shellcheck disable=SC2034
 decode_gpus=$4
 num_examples=${5:-}              # Default: all examples
-max_tokens=${6:-16384}            # Default: 8192 (reduced to fit within context limit)
-max_context_length=${7:-128000}  # Default: 115000 (must ensure input + max_tokens <= server context_length)
+max_tokens=${6:-16384}           # Default: 16384
+max_context_length=${7:-128000}  # Default: 128000 (must ensure input + max_tokens <= server context_length)
 num_threads=${8:-16}             # Default: 16
 # Note: --thinking-mode removed because dynamo frontend doesn't support chat_template_kwargs
 categories=${9:-}                # Default: all categories
