@@ -23,6 +23,13 @@ num_threads=${8:-16}             # Default: 16
 # Note: --thinking-mode removed because dynamo frontend doesn't support chat_template_kwargs
 categories=${9:-}                # Default: all categories
 
+# Handle "_" placeholder (means use default)
+[ "$num_examples" = "_" ] && num_examples=""
+[ "$max_tokens" = "_" ] && max_tokens="16384"
+[ "$max_context_length" = "_" ] && max_context_length="128000"
+[ "$num_threads" = "_" ] && num_threads="16"
+[ "$categories" = "_" ] && categories=""
+
 echo "LongBench-v2 Benchmark Config: num_examples=${num_examples:-all}; max_tokens=${max_tokens}; max_context_length=${max_context_length}; num_threads=${num_threads}; categories=${categories:-all}"
 
 # Source utilities for wait_for_model
@@ -44,6 +51,14 @@ echo "Running LongBench-v2 evaluation..."
 if [ -z "$OPENAI_API_KEY" ]; then
     export OPENAI_API_KEY="EMPTY"
 fi
+
+# Set HF_TOKEN for HuggingFace API access (avoid rate limiting)
+if [ -z "$HF_TOKEN" ]; then
+    export HF_TOKEN="${HF_TOKEN:?Please set HF_TOKEN}"  # TODO: Replace with your actual token!
+fi
+
+# Setup shared HuggingFace cache (defined in benchmark_utils.sh)
+setup_hf_cache "/configs/hf_cache"
 
 # Build the command
 # Note: --thinking-mode removed because dynamo frontend doesn't support chat_template_kwargs

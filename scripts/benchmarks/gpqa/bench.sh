@@ -4,18 +4,32 @@
 
 # GPQA evaluation script using sglang.test.run_eval with gpqa
 
+# Set HF_TOKEN to avoid rate limiting when downloading tokenizer
+# You can override this by setting HF_TOKEN environment variable before running
+if [ -z "$HF_TOKEN" ]; then
+    # Default token - replace with your own or set HF_TOKEN env var
+    export HF_TOKEN="${HF_TOKEN:-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}"
+    echo "Warning: HF_TOKEN not set. Using default token. Set HF_TOKEN env var to use your own."
+fi
+export HUGGING_FACE_HUB_TOKEN="$HF_TOKEN"
+
 head_node="localhost"
 head_port=8000
-model_name="deepseek-ai/DeepSeek-R1"  # Default model name
+# Model name must match served-model-name in sglang config
+# Use MODEL_NAME env var if set, otherwise default to nvidia FP4 model
+model_name="${MODEL_NAME:-nvidia/DeepSeek-R1-0528-NVFP4-v2}"
 
 # Parse arguments from SLURM job
 n_prefill=$1
 n_decode=$2
+# prefill_gpus and decode_gpus are parsed for argument position consistency with other benchmarks
+# shellcheck disable=SC2034
 prefill_gpus=$3
+# shellcheck disable=SC2034
 decode_gpus=$4
 num_examples=${5:-198}  # Default: 198
-max_tokens=${6:-512}    # Default: 512
-repeat=${7:-8}          # Default: 8
+max_tokens=${6:-16384}   # Default: 16384 (R1 needs more tokens for thinking)
+repeat=${7:-1}          # Default: 1
 num_threads=${8:-512}   # Default: 512
 thinking_mode=${9:-deepseek-r1} # Default: deepseek-r1
 
@@ -42,6 +56,7 @@ if [ -z "$OPENAI_API_KEY" ]; then
 fi
 
 # Run the evaluation
+# Note: --thinking-mode removed because dynamo frontend doesn't support chat_template_kwargs
 python3 -m sglang.test.run_eval \
     --base-url "http://${head_node}:${head_port}" \
     --model ${model_name} \
@@ -49,8 +64,7 @@ python3 -m sglang.test.run_eval \
     --num-examples ${num_examples} \
     --max-tokens ${max_tokens} \
     --repeat ${repeat} \
-    --num-threads ${num_threads} \
-    --thinking-mode ${thinking_mode}
+    --num-threads ${num_threads}
 
 # Copy the result file from /tmp to our logs directory
 # The result file is named gpqa_{model_name}.json

@@ -197,12 +197,13 @@ class SGLangBackend(Backend):
 
         return enable_config_dump
 
-    def generate_slurm_script(self, config_path: Path = None, timestamp: str = None) -> tuple[Path, str]:
+    def generate_slurm_script(self, config_path: Path = None, timestamp: str = None, recipe_name: str = None) -> tuple[Path, str]:
         """Generate SLURM job script from Jinja template.
 
         Args:
             config_path: Path to SGLang config file
             timestamp: Timestamp for job submission
+            recipe_name: Recipe name to append to log directory name
 
         Returns:
             Tuple of (script_path, rendered_script_content)
@@ -262,6 +263,24 @@ class SGLangBackend(Backend):
                 concurrency_str = str(concurrencies)
 
             parsable_config = f"{isl} {osl} {concurrency_str} {req_rate}"
+        elif bench_type == "longbenchv2":
+            # LongBench-v2 args: num_examples max_tokens max_context_length num_threads categories
+            # bench.sh expects positional args in this order after the standard 4 args
+            # Use "_" as placeholder for None values to preserve arg positions in bash
+            num_examples = benchmark_config.get("num_examples")
+            max_tokens = benchmark_config.get("max_tokens")
+            max_context_length = benchmark_config.get("max_context_length")
+            num_threads = benchmark_config.get("num_threads")
+            categories = benchmark_config.get("categories")
+
+            # Use "_" placeholder to preserve positional args (bash will handle defaults)
+            num_examples = "_" if num_examples is None else str(num_examples)
+            max_tokens = "_" if max_tokens is None else str(max_tokens)
+            max_context_length = "_" if max_context_length is None else str(max_context_length)
+            num_threads = "_" if num_threads is None else str(num_threads)
+            categories = "_" if categories is None else str(categories)
+
+            parsable_config = f"{num_examples} {max_tokens} {max_context_length} {num_threads} {categories}"
 
         # Config directory should point to where deepep_config.json lives
         # This is typically the configs/ directory in the yaml-config repo
@@ -340,6 +359,7 @@ class SGLangBackend(Backend):
             "use_gpus_per_node_directive": get_srtslurm_setting("use_gpus_per_node_directive", True),
             "use_segment_sbatch_directive": get_srtslurm_setting("use_segment_sbatch_directive", True),
             "extra_container_mounts": ",".join(self.config.get("extra_mount") or []),
+            "recipe_name": recipe_name or "",
         }
 
         # Select template based on mode

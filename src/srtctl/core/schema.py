@@ -165,6 +165,13 @@ class BenchmarkConfig(BaseModel):
     )
     req_rate: Optional[str] = Field("inf", description="Request rate")
 
+    # LongBench-v2 specific
+    num_examples: Optional[int] = Field(None, description="Number of examples to evaluate (default: all)")
+    max_tokens: Optional[int] = Field(None, description="Max output tokens (default: 16384)")
+    max_context_length: Optional[int] = Field(None, description="Max context length (default: 128000, use 65536 for 64k)")
+    num_threads: Optional[int] = Field(None, description="Number of evaluation threads (default: 16)")
+    categories: Optional[str] = Field(None, description="Categories to evaluate (default: all)")
+
 
 class ProfilingType(str, Enum):
     """Supported profiling types."""

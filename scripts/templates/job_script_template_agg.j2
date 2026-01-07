@@ -8,8 +8,13 @@
 {% endif %}
 #SBATCH --account={{ account }}
 #SBATCH --time={{ time_limit }}
+{% if recipe_name %}
+#SBATCH --output={{ log_dir_prefix }}/%j_{{ agg_workers }}A_{{ timestamp }}-{{ recipe_name }}/log.out
+#SBATCH --error={{ log_dir_prefix }}/%j_{{ agg_workers }}A_{{ timestamp }}-{{ recipe_name }}/log.err
+{% else %}
 #SBATCH --output={{ log_dir_prefix }}/%j_{{ agg_workers }}A_{{ timestamp }}/log.out
 #SBATCH --error={{ log_dir_prefix }}/%j_{{ agg_workers }}A_{{ timestamp }}/log.err
+{% endif %}
 #SBATCH --partition={{ partition }}
 
 # Constants
@@ -22,10 +27,18 @@ TOTAL_GPUS=$((AGG_NODES * GPUS_PER_NODE))
 PREFILL_GPUS=0
 DECODE_GPUS=$TOTAL_GPUS
 AGG_NODES_PER_WORKER=$((AGG_NODES / AGG_WORKERS))
+{% if recipe_name %}
+{% if log_dir_prefix.startswith('/') %}
+LOG_DIR="{{ log_dir_prefix }}/${SLURM_JOB_ID}_{{ agg_workers }}A_{{ timestamp }}-{{ recipe_name }}"
+{% else %}
+LOG_DIR="${SLURM_SUBMIT_DIR}/{{ log_dir_prefix }}/${SLURM_JOB_ID}_{{ agg_workers }}A_{{ timestamp }}-{{ recipe_name }}"
+{% endif %}
+{% else %}
 {% if log_dir_prefix.startswith('/') %}
 LOG_DIR="{{ log_dir_prefix }}/${SLURM_JOB_ID}_{{ agg_workers }}A_{{ timestamp }}"
 {% else %}
 LOG_DIR="${SLURM_SUBMIT_DIR}/{{ log_dir_prefix }}/${SLURM_JOB_ID}_{{ agg_workers }}A_{{ timestamp }}"
+{% endif %}
 {% endif %}
 SCRIPT_DIR="${SLURM_SUBMIT_DIR}/scripts"
 OUTPUT_DIR="${SLURM_SUBMIT_DIR}/outputs"

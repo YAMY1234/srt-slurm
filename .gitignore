@@ -1,5 +1,6 @@
 # Logs directory - ignore all benchmark runs
 logs/*/
+logs*/*/
 
 # Dry-run output directories (local testing artifacts)
 dry-runs/

@@ -133,9 +133,18 @@ fi
 
 # Only the prefill profiling job needs to generate traffic through the router.
 if [[ "${PROFILING_MODE}" == "prefill" ]]; then
+    # Export HF_TOKEN to avoid rate limiting from HuggingFace
+    export HF_TOKEN="${HF_TOKEN:-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}"
+    
+    # Use local tokenizer if available to avoid HuggingFace dependency
+    TOKENIZER_ARG=""
+    if [ -d "/model" ] && [ -f "/model/tokenizer_config.json" ]; then
+        TOKENIZER_ARG="--tokenizer /model/"
+    fi
+    
     python3 -m sglang.bench_serving \
     --backend sglang \
-    --model ${model_name} \
+    --model ${model_name} ${TOKENIZER_ARG} \
     --host ${head_node} --port ${head_port} \
     --dataset-name random \
     --max-concurrency $PROFILE_CONCURRENCY \

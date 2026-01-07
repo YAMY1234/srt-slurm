@@ -11,7 +11,11 @@
 {% endif %}
 #SBATCH --account={{ account }}
 #SBATCH --time={{ time_limit }}
+{% if recipe_name %}
+#SBATCH --output={{ log_dir_prefix }}/%j_{{ prefill_workers }}P_{{ decode_workers }}D_{{ timestamp }}-{{ recipe_name }}/log.out
+{% else %}
 #SBATCH --output={{ log_dir_prefix }}/%j_{{ prefill_workers }}P_{{ decode_workers }}D_{{ timestamp }}/log.out
+{% endif %}
 #SBATCH --partition={{ partition }}
 
 # Constants
@@ -27,10 +31,18 @@ PREFILL_GPUS=$((PREFILL_NODES * GPUS_PER_NODE))
 DECODE_GPUS=$((DECODE_NODES * GPUS_PER_NODE))
 PREFILL_NODES_PER_WORKER=$((PREFILL_NODES / PREFILL_WORKERS))
 DECODE_NODES_PER_WORKER=$((DECODE_NODES / DECODE_WORKERS))
+{% if recipe_name %}
+{% if log_dir_prefix.startswith('/') %}
+LOG_DIR="{{ log_dir_prefix }}/${SLURM_JOB_ID}_{{ prefill_workers }}P_{{ decode_workers }}D_{{ timestamp }}-{{ recipe_name }}"
+{% else %}
+LOG_DIR="${SLURM_SUBMIT_DIR}/{{ log_dir_prefix }}/${SLURM_JOB_ID}_{{ prefill_workers }}P_{{ decode_workers }}D_{{ timestamp }}-{{ recipe_name }}"
+{% endif %}
+{% else %}
 {% if log_dir_prefix.startswith('/') %}
 LOG_DIR="{{ log_dir_prefix }}/${SLURM_JOB_ID}_{{ prefill_workers }}P_{{ decode_workers }}D_{{ timestamp }}"
 {% else %}
 LOG_DIR="${SLURM_SUBMIT_DIR}/{{ log_dir_prefix }}/${SLURM_JOB_ID}_{{ prefill_workers }}P_{{ decode_workers }}D_{{ timestamp }}"
+{% endif %}
 {% endif %}
 SCRIPT_DIR="${SLURM_SUBMIT_DIR}/scripts"
 OUTPUT_DIR="${SLURM_SUBMIT_DIR}/outputs"
@@ -254,39 +266,7 @@ fi
 {% endif %}
 {% raw %}
 
-# Launch prefill workers
-for worker_idx in $(seq 0 $((PREFILL_WORKERS - 1))); do
-    leader_idx=${prefill_leaders[$worker_idx]}
-    leader_node=${nodes[$leader_idx]}
-
-    # Get leader IP for this worker group
-    LEADER_IP=$(get_node_ip "$leader_node" "$SLURM_JOB_ID" "$NETWORK_INTERFACE")
-    echo "Prefill worker $worker_idx leader: $leader_node ($LEADER_IP)"
-
-    # Launch all nodes for this worker
-    for node_idx in $(seq 0 $((PREFILL_NODES_PER_WORKER - 1))); do
-        global_node_idx=$((leader_idx + node_idx))
-        node=${nodes[$global_node_idx]}
-        local_rank=$node_idx
-
-        echo "Launching prefill worker $worker_idx, node $global_node_idx (local_rank $local_rank): $node"
-{% endraw %}
-{% if enable_config_dump %}
-{% raw %}
-        CONFIG_DUMP_ARG="--dump-config-path /logs/${node}_config.json"
-{% endraw %}
-{% else %}
-{% raw %}
-        CONFIG_DUMP_ARG=""
-{% endraw %}
-{% endif %}
-{% raw %}
-        cmd="srun --overlap $ENROOT_ARGS --nodes=1 --ntasks=1 --nodelist=$node --output=${LOG_DIR}/${node}_prefill_w${worker_idx}.out python /scripts/worker_setup.py --leader_ip ${LEADER_IP} --worker_idx ${worker_idx} --local_rank ${local_rank} --nodes_per_worker ${PREFILL_NODES_PER_WORKER} --worker_type prefill ${WORKER_ARGS} ${CONFIG_DUMP_ARG}"
-        echo "$cmd"
-        $cmd &
-    done
-done
-
+# Launch decode workers FIRST
 # Launch decode workers
 for worker_idx in $(seq 0 $((DECODE_WORKERS - 1))); do
     leader_idx=${decode_leaders[$worker_idx]}
@@ -315,6 +295,75 @@ for worker_idx in $(seq 0 $((DECODE_WORKERS - 1))); do
 {% endif %}
 {% raw %}
         cmd="srun --overlap $ENROOT_ARGS --nodes=1 --ntasks=1 --nodelist=$node --output=${LOG_DIR}/${node}_decode_w${worker_idx}.out python /scripts/worker_setup.py --leader_ip ${LEADER_IP} --worker_idx ${worker_idx} --local_rank ${local_rank} --nodes_per_worker ${DECODE_NODES_PER_WORKER} --worker_type decode ${CONFIG_DUMP_ARG} ${WORKER_ARGS}"
+        echo "$cmd"
+        $cmd &
+    done
+done
+
+{% endraw %}
+{% if profiler != 'none' %}
+{% raw %}
+# In profiling mode, wait for decode workers to be ready before starting prefill
+# This reduces the amount of idle time captured in prefill's nsys trace
+echo "=== Profiling mode: Waiting for decode workers to be ready before starting prefill ==="
+wait_for_server() {
+    local url=$1
+    local max_wait=${2:-900}
+    local start_time=$(date +%s)
+    while true; do
+        if curl -s -o /dev/null -w "%{http_code}" "${url}/health" 2>/dev/null | grep -q "200"; then
+            echo "Server ${url} is ready"
+            return 0
+        fi
+        local elapsed=$(($(date +%s) - start_time))
+        if [ $elapsed -ge $max_wait ]; then
+            echo "Timeout waiting for ${url}"
+            return 1
+        fi
+        sleep 10
+    done
+}
+
+# Wait for all decode workers to be ready
+for idx in "${decode_leaders[@]}"; do
+    node_name=${nodes[$idx]}
+    ip=$(get_node_ip "$node_name" "$SLURM_JOB_ID" "$NETWORK_INTERFACE")
+    echo "Waiting for decode worker at http://${ip}:30000..."
+    wait_for_server "http://${ip}:30000"
+done
+echo "All decode workers are ready. Now starting prefill workers..."
+{% endraw %}
+{% endif %}
+{% raw %}
+
+# Launch prefill workers
+for worker_idx in $(seq 0 $((PREFILL_WORKERS - 1))); do
+    leader_idx=${prefill_leaders[$worker_idx]}
+    leader_node=${nodes[$leader_idx]}
+
+    # Get leader IP for this worker group
+    LEADER_IP=$(get_node_ip "$leader_node" "$SLURM_JOB_ID" "$NETWORK_INTERFACE")
+    echo "Prefill worker $worker_idx leader: $leader_node ($LEADER_IP)"
+
+    # Launch all nodes for this worker
+    for node_idx in $(seq 0 $((PREFILL_NODES_PER_WORKER - 1))); do
+        global_node_idx=$((leader_idx + node_idx))
+        node=${nodes[$global_node_idx]}
+        local_rank=$node_idx
+
+        echo "Launching prefill worker $worker_idx, node $global_node_idx (local_rank $local_rank): $node"
+{% endraw %}
+{% if enable_config_dump %}
+{% raw %}
+        CONFIG_DUMP_ARG="--dump-config-path /logs/${node}_config.json"
+{% endraw %}
+{% else %}
+{% raw %}
+        CONFIG_DUMP_ARG=""
+{% endraw %}
+{% endif %}
+{% raw %}
+        cmd="srun --overlap $ENROOT_ARGS --nodes=1 --ntasks=1 --nodelist=$node --output=${LOG_DIR}/${node}_prefill_w${worker_idx}.out python /scripts/worker_setup.py --leader_ip ${LEADER_IP} --worker_idx ${worker_idx} --local_rank ${local_rank} --nodes_per_worker ${PREFILL_NODES_PER_WORKER} --worker_type prefill ${WORKER_ARGS} ${CONFIG_DUMP_ARG}"
         echo "$cmd"
         $cmd &
     done

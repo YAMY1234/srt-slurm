@@ -8,7 +8,7 @@ import subprocess
 import os
 
 from .command import get_gpu_command, install_dynamo_wheels
-from .environment import DIST_INIT_PORT, ETCD_CLIENT_PORT
+from .environment import DIST_INIT_PORT, get_etcd_client_port
 from .infrastructure import setup_head_prefill_node
 from .utils import run_command, wait_for_etcd
 
@@ -88,16 +88,18 @@ def setup_prefill_worker(
 ) -> int:
     """Setup the prefill worker."""
     # Setup infrastructure first (if traditional mode)
-    need_frontend = not multiple_frontends_enabled and worker_idx == 0 and local_rank == 0
+    # When using sglang_router, we don't need dynamo frontend
+    need_frontend = not multiple_frontends_enabled and not use_sglang_router and worker_idx == 0 and local_rank == 0
 
     if not use_sglang_router:
+        etcd_port = get_etcd_client_port()
         if need_frontend:
             setup_head_prefill_node(master_ip)
-            if not wait_for_etcd(f"http://{master_ip}:{ETCD_CLIENT_PORT}"):
+            if not wait_for_etcd(f"http://{master_ip}:{etcd_port}"):
                 raise RuntimeError("Failed to connect to etcd")
         else:
             logging.info(f"Setting up prefill worker {worker_idx}, local rank {local_rank}")
-            if not wait_for_etcd(f"http://{master_ip}:{ETCD_CLIENT_PORT}"):
+            if not wait_for_etcd(f"http://{master_ip}:{etcd_port}"):
                 raise RuntimeError("Failed to connect to etcd")
 
     # Install dynamo from PyPI
@@ -156,7 +158,8 @@ def setup_decode_worker(
     logging.info(f"Setting up decode worker {worker_idx}, local rank {local_rank}")
 
     if not use_sglang_router:
-        if not wait_for_etcd(f"http://{master_ip}:{ETCD_CLIENT_PORT}"):
+        etcd_port = get_etcd_client_port()
+        if not wait_for_etcd(f"http://{master_ip}:{etcd_port}"):
             raise RuntimeError("Failed to connect to etcd")
 
     # Install dynamo from PyPI
@@ -199,16 +202,18 @@ def setup_aggregated_worker(
 ) -> int:
     """Setup the aggregated worker."""
     # Setup infrastructure first (if traditional mode)
-    need_frontend = not multiple_frontends_enabled and worker_idx == 0 and local_rank == 0
+    # When using sglang_router, we don't need dynamo frontend
+    need_frontend = not multiple_frontends_enabled and not use_sglang_router and worker_idx == 0 and local_rank == 0
 
     if not use_sglang_router:
+        etcd_port = get_etcd_client_port()
         if need_frontend:
             setup_head_prefill_node(master_ip)
-            if not wait_for_etcd(f"http://{master_ip}:{ETCD_CLIENT_PORT}"):
+            if not wait_for_etcd(f"http://{master_ip}:{etcd_port}"):
                 raise RuntimeError("Failed to connect to etcd")
         else:
             logging.info(f"Setting up aggregated worker {worker_idx}, local rank {local_rank}")
-            if not wait_for_etcd(f"http://{master_ip}:{ETCD_CLIENT_PORT}"):
+            if not wait_for_etcd(f"http://{master_ip}:{etcd_port}"):
                 raise RuntimeError("Failed to connect to etcd")
 
     # Install dynamo from PyPI

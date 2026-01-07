@@ -153,6 +153,7 @@ def submit_single(
     dry_run: bool = False,
     setup_script: str = None,
     tags: list[str] = None,
+    recipe_name: str = None,
 ):
     """
     Submit a single job from YAML config.
@@ -210,8 +211,10 @@ def submit_single(
 
         # Generate SLURM job script using backend
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        # Determine recipe name: use provided recipe_name or extract from config_path
+        effective_recipe_name = recipe_name if recipe_name else (config_path.stem if config_path else None)
         script_path, rendered_script = backend.generate_slurm_script(
-            config_path=sglang_config_path, timestamp=timestamp
+            config_path=sglang_config_path, timestamp=timestamp, recipe_name=effective_recipe_name
         )
 
         # Submit to SLURM
@@ -231,6 +234,13 @@ def submit_single(
                 prefill_workers = config["resources"]["prefill_workers"]
                 decode_workers = config["resources"]["decode_workers"]
                 log_dir_name = f"{job_id}_{prefill_workers}P_{decode_workers}D_{timestamp}"
+            
+            # Append recipe name if available
+            if recipe_name:
+                log_dir_name = f"{log_dir_name}-{recipe_name}"
+            elif config_path:
+                # Extract recipe name from config path (without .yaml extension)
+                log_dir_name = f"{log_dir_name}-{config_path.stem}"
 
             # Create log directory in srtctl repo
             from srtctl.core.config import get_srtslurm_setting
@@ -425,10 +435,12 @@ def submit_sweep(config_path: Path, dry_run: bool = False, setup_script: str = N
         return
 
     # Real submission
+    # Extract recipe name from sweep config path
+    sweep_recipe_name = config_path.stem if config_path else None
     for i, (config, params) in enumerate(configs, 1):
         logging.info(f"\n[{i}/{len(configs)}] Submitting: {config['name']}")
         logging.info(f"  Parameters: {params}")
-        submit_single(config=config, dry_run=False, setup_script=setup_script, tags=tags)
+        submit_single(config=config, dry_run=False, setup_script=setup_script, tags=tags, recipe_name=sweep_recipe_name)
 
 
 def main():
