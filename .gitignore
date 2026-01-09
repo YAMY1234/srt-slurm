@@ -55,3 +55,6 @@ outputs/*
 *.egg-info/
 
 .coverage
+
+outputs/
+configs/flashinfer-cache/

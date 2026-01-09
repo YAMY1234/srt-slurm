@@ -4,7 +4,7 @@
 """Benchmark runners for srtctl."""
 
 # Import runners to trigger registration
-from srtctl.benchmarks import gpqa, gsm8k, longbenchv2, mmlu, mooncake_router, profiling, router, sa_bench
+from srtctl.benchmarks import gpqa, gsm8k, longbenchv2, mmlu, mooncake_router, router, sa_bench, sglang_bench
 from srtctl.benchmarks.base import (
     BenchmarkRunner,
     get_runner,
@@ -19,11 +19,11 @@ __all__ = [
     "register_benchmark",
     # Runners
     "sa_bench",
+    "sglang_bench",
     "mmlu",
     "gpqa",
     "gsm8k",
     "longbenchv2",
     "router",
     "mooncake_router",
-    "profiling",
 ]
