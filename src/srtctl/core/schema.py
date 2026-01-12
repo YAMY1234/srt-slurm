@@ -171,6 +171,7 @@ class BenchmarkConfig(BaseModel):
     max_context_length: Optional[int] = Field(None, description="Max context length (default: 128000, use 65536 for 64k)")
     num_threads: Optional[int] = Field(None, description="Number of evaluation threads (default: 16)")
     categories: Optional[str] = Field(None, description="Categories to evaluate (default: all)")
+    repeat: Optional[int] = Field(None, description="Number of times to repeat evaluation (default: 1)")
 
 
 class ProfilingType(str, Enum):

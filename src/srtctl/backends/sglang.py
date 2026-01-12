@@ -264,7 +264,7 @@ class SGLangBackend(Backend):
 
             parsable_config = f"{isl} {osl} {concurrency_str} {req_rate}"
         elif bench_type == "longbenchv2":
-            # LongBench-v2 args: num_examples max_tokens max_context_length num_threads categories
+            # LongBench-v2 args: num_examples max_tokens max_context_length num_threads categories repeat
             # bench.sh expects positional args in this order after the standard 4 args
             # Use "_" as placeholder for None values to preserve arg positions in bash
             num_examples = benchmark_config.get("num_examples")
@@ -272,6 +272,7 @@ class SGLangBackend(Backend):
             max_context_length = benchmark_config.get("max_context_length")
             num_threads = benchmark_config.get("num_threads")
             categories = benchmark_config.get("categories")
+            repeat = benchmark_config.get("repeat")
 
             # Use "_" placeholder to preserve positional args (bash will handle defaults)
             num_examples = "_" if num_examples is None else str(num_examples)
@@ -279,8 +280,9 @@ class SGLangBackend(Backend):
             max_context_length = "_" if max_context_length is None else str(max_context_length)
             num_threads = "_" if num_threads is None else str(num_threads)
             categories = "_" if categories is None else str(categories)
+            repeat = "_" if repeat is None else str(repeat)
 
-            parsable_config = f"{num_examples} {max_tokens} {max_context_length} {num_threads} {categories}"
+            parsable_config = f"{num_examples} {max_tokens} {max_context_length} {num_threads} {categories} {repeat}"
 
         # Config directory should point to where deepep_config.json lives
         # This is typically the configs/ directory in the yaml-config repo

@@ -22,6 +22,7 @@ max_context_length=${7:-128000}  # Default: 128000 (must ensure input + max_toke
 num_threads=${8:-16}             # Default: 16
 # Note: --thinking-mode removed because dynamo frontend doesn't support chat_template_kwargs
 categories=${9:-}                # Default: all categories
+repeat=${10:-1}                  # Default: 1 (run evaluation once)
 
 # Handle "_" placeholder (means use default)
 [ "$num_examples" = "_" ] && num_examples=""
@@ -29,8 +30,9 @@ categories=${9:-}                # Default: all categories
 [ "$max_context_length" = "_" ] && max_context_length="128000"
 [ "$num_threads" = "_" ] && num_threads="16"
 [ "$categories" = "_" ] && categories=""
+[ "$repeat" = "_" ] && repeat="1"
 
-echo "LongBench-v2 Benchmark Config: num_examples=${num_examples:-all}; max_tokens=${max_tokens}; max_context_length=${max_context_length}; num_threads=${num_threads}; categories=${categories:-all}"
+echo "LongBench-v2 Benchmark Config: num_examples=${num_examples:-all}; max_tokens=${max_tokens}; max_context_length=${max_context_length}; num_threads=${num_threads}; categories=${categories:-all}; repeat=${repeat}"
 
 # Source utilities for wait_for_model
 source /scripts/utils/benchmark_utils.sh
@@ -68,7 +70,8 @@ cmd="python3 -m sglang.test.run_eval \
     --eval-name longbench_v2 \
     --max-tokens ${max_tokens} \
     --max-context-length ${max_context_length} \
-    --num-threads ${num_threads}"
+    --num-threads ${num_threads} \
+    --repeat ${repeat}"
 
 # Add optional arguments
 if [ -n "$num_examples" ]; then
