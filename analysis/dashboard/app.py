@@ -4,7 +4,6 @@ Main Streamlit Dashboard Entry Point
 
 import logging
 import os
-
 import sys
 from pathlib import Path
 
@@ -13,13 +12,13 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 import streamlit as st
 
-from analysis.dashboard import components
 from analysis.dashboard import (
-    pareto_tab,
+    components,
+    config_tab,
     latency_tab,
     node_metrics_tab,
+    pareto_tab,
     rate_match_tab,
-    config_tab,
 )
 from analysis.srtlog import RunLoader
 
@@ -224,14 +223,17 @@ def render_sidebar(logs_dir, runs):
 
             col_add, col_clear = st.columns([1, 1])
             with col_add:
-                if st.button("Add", key=f"add_tag_{run.job_id}", disabled=not tag_input):
-                    if tag_input and tag_input not in current_tags:
-                        new_tags = current_tags + [tag_input]
-                        loader = RunLoader(logs_dir)
-                        if loader.update_tags(run.metadata.path, new_tags):
-                            st.success(f"Added tag: {tag_input}")
-                            components.load_data.clear()
-                            st.rerun()
+                if (
+                    st.button("Add", key=f"add_tag_{run.job_id}", disabled=not tag_input)
+                    and tag_input
+                    and tag_input not in current_tags
+                ):
+                    new_tags = current_tags + [tag_input]
+                    loader = RunLoader(logs_dir)
+                    if loader.update_tags(run.metadata.path, new_tags):
+                        st.success(f"Added tag: {tag_input}")
+                        components.load_data.clear()
+                        st.rerun()
 
             # Display and manage existing tags
             if current_tags:
@@ -355,40 +357,6 @@ def main():
     if not os.path.exists(logs_dir):
         st.error(f"Directory not found: {logs_dir}")
         return
-
-    # Cloud Sync Section (always available)
-    st.sidebar.divider()
-    st.sidebar.header("Cloud Sync")
-    auto_sync = st.sidebar.checkbox(
-        "☁️ Auto-sync on load",
-        value=False,
-        help="Automatically pull missing runs from cloud storage on startup",
-    )
-
-    if st.sidebar.button("🔄 Sync Now", key="sync_now_main"):
-        components.load_data.clear()
-        st.session_state["force_sync"] = True
-        st.rerun()
-
-    # Perform sync if enabled
-    if auto_sync or st.session_state.get("force_sync", False):
-        st.session_state["force_sync"] = False
-
-        with st.spinner("Syncing from cloud storage..."):
-            sync_performed, sync_count, error = components.sync_cloud_data(logs_dir)
-
-        if sync_performed:
-            if error:
-                st.sidebar.error(f"Sync failed: {error}")
-            elif sync_count > 0:
-                st.sidebar.success(f"✓ Downloaded {sync_count} new run(s)")
-                # Clear cache and reload to show new runs
-                components.load_data.clear()
-                st.rerun()
-            else:
-                st.sidebar.info("✓ All runs up to date")
-        else:
-            st.sidebar.info("💡 Cloud sync not configured")
 
     # Load data (fingerprint auto-invalidates cache when new dirs are added)
     with st.spinner("Loading benchmark data..."):

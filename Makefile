@@ -1,4 +1,4 @@
-.PHONY: lint typecheck test setup-configs dashboard sync-to-cloud sync-run delete-from-cloud cleanup
+.PHONY: lint test test-cov ci check setup cleanup gb200-fp8 gb200-fp4
 
 NATS_VERSION ?= v2.10.28
 ETCD_VERSION ?= v3.5.21
@@ -8,38 +8,37 @@ ARCH ?= $(shell uname -m)
 default:
 	./run_dashboard.sh
 
+# === CI targets ===
 lint:
-	uvx pre-commit run --all-files
+	uv run ruff check src/srtctl/
+	uv run ruff format src/srtctl/
+	uv run ty check src/srtctl/ || true
 
 test:
-	uv run pytest tests/
+	uv run pytest tests/ -v
 
-dashboard:
-	uv run streamlit run analysis/dashboard/app.py
+test-cov:
+	uv run pytest tests/ --cov=srtctl --cov-report=term-missing --cov-report=html
 
-sync-to-cloud:
-	@echo "☁️  Syncing benchmark results to cloud storage..."
-	@echo "📁 Logs directory: $(LOGS_DIR)"
-	@uv run python -m analysis.srtlog.sync_results --logs-dir $(LOGS_DIR) push-all
-	@echo "✅ Sync complete!"
+# Run lint + tests in one command
+check: lint test
+	@echo "✓ All checks passed"
 
-sync-run:
-	@if [ -z "$(RUN_ID)" ]; then \
-		echo "❌ Error: RUN_ID not specified"; \
-		echo "Usage: make sync-run RUN_ID=3667_1P_1D_20251110_192145"; \
-		exit 1; \
-	fi
-	@echo "☁️  Syncing run $(RUN_ID) to cloud storage..."
-	@uv run python -m analysis.srtlog.sync_results --logs-dir $(LOGS_DIR) push $(LOGS_DIR)/$(RUN_ID)
-	@echo "✅ Sync complete!"
+# Runners
+gb200-fp8:
+	srtctl apply -f recipies/gb200-fp8/1k1k/low-latency.yaml
+	srtctl apply -f recipies/gb200-fp8/1k1k/max-tpt-2p1d.yaml
+	srtctl apply -f recipies/gb200-fp8/1k1k/mid-curve-3p1d.yaml
+	srtctl apply -f recipies/gb200-fp8/8k1k/low-latency.yaml
+	srtctl apply -f recipies/gb200-fp8/8k1k/mid-curve-5p1d.yaml
 
-delete-from-cloud:
-	@if [ -z "$(RUN_ID)" ]; then \
-		echo "❌ Error: RUN_ID not specified"; \
-		echo "Usage: make delete-from-cloud RUN_ID=3667_1P_1D_20251110_192145"; \
-		exit 1; \
-	fi
-	@uv run python -m analysis.srtlog.sync_results delete $(RUN_ID)
+gb200-fp4:
+	srtctl apply -f recipies/gb200-fp4/1k1k/low-latency.yaml
+	srtctl apply -f recipies/gb200-fp4/1k1k/max-tpt.yaml
+	srtctl apply -f recipies/gb200-fp4/1k1k/mid-curve.yaml
+	srtctl apply -f recipies/gb200-fp4/8k1k/low-latency.yaml
+	srtctl apply -f recipies/gb200-fp4/8k1k/max-tpt.yaml
+	srtctl apply -f recipies/gb200-fp4/8k1k/mid-curve.yaml
 
 setup:
 	@echo "📦 Setting up configs and logs directories..."
@@ -113,12 +112,6 @@ setup:
 		echo "# Path to srtctl repo root (where scripts/templates/ lives)" >> srtslurm.yaml; \
 		echo "# Auto-detected from current directory" >> srtslurm.yaml; \
 		echo "srtctl_root: \"$$SRTCTL_ROOT\"" >> srtslurm.yaml; \
-		echo "" >> srtslurm.yaml; \
-		echo "# Cloud sync settings (optional)" >> srtslurm.yaml; \
-		echo "cloud:" >> srtslurm.yaml; \
-		echo "  endpoint_url: \"\"" >> srtslurm.yaml; \
-		echo "  bucket: \"\"" >> srtslurm.yaml; \
-		echo "  prefix: \"benchmark-results/\"" >> srtslurm.yaml; \
 		echo "✅ Created srtslurm.yaml"; \
 		echo "   You can edit it anytime to add model_paths, containers, etc."; \
 	fi

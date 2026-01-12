@@ -8,11 +8,6 @@ import os
 import streamlit as st
 
 from analysis.srtlog import NodeAnalyzer, RunLoader
-from analysis.srtlog.cloud_sync import create_sync_manager_from_config
-
-
-# Update default config path
-DEFAULT_CONFIG = "srtslurm.yaml"
 
 logger = logging.getLogger(__name__)
 
@@ -49,33 +44,6 @@ CUSTOM_CSS = """
 def apply_custom_css():
     """Apply custom CSS to the dashboard."""
     st.markdown(CUSTOM_CSS, unsafe_allow_html=True)
-
-
-def sync_cloud_data(logs_dir):
-    """Sync missing runs from cloud storage if configured.
-
-    Returns:
-        Tuple of (sync_performed: bool, files_downloaded: int, error_message: str or None)
-    """
-    try:
-        sync_manager = create_sync_manager_from_config(DEFAULT_CONFIG)
-        if sync_manager is None:
-            # No cloud config, skip sync
-            return False, 0, None
-
-        # Sync missing runs (only downloads files that don't exist locally)
-        runs_synced, files_downloaded, files_skipped = sync_manager.sync_missing_runs(logs_dir)
-
-        # Log sync details
-        if files_downloaded > 0:
-            logger.info(f"Synced {runs_synced} runs: {files_downloaded} downloaded, {files_skipped} skipped")
-        else:
-            logger.info(f"All runs up to date ({files_skipped} files already present)")
-
-        return True, files_downloaded, None
-    except Exception as e:
-        logger.error(f"Failed to sync cloud data: {e}")
-        return True, 0, str(e)
 
 
 def get_logs_dir_fingerprint(logs_dir):
@@ -190,10 +158,10 @@ def _memory_to_dict(mem) -> dict:
 
 
 def get_default_logs_dir():
-    """Get default logs directory path (project root/logs)."""
+    """Get default outputs directory path (project root/outputs)."""
     # Go up 3 levels: components.py -> dashboard -> analysis -> project root
     project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    return os.path.join(project_root, "logs")
+    return os.path.join(project_root, "outputs")
 
 
 # Cached graph creation functions for node metrics

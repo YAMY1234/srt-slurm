@@ -2,6 +2,17 @@
 
 Parameter sweeps let you run multiple configurations with a single command. Sweeps are automatically detected from config files that contain a `sweep:` section.
 
+## Table of Contents
+
+- [How It Works](#how-it-works)
+- [Simple Walkthrough](#simple-walkthrough)
+- [Multiple Parameters](#multiple-parameters)
+- [Where Placeholders Can Go](#where-placeholders-can-go)
+- [Auto-Detection](#auto-detection)
+- [Tips](#tips)
+
+---
+
 ## How It Works
 
 1. Add a `sweep:` section to your YAML config with parameter values

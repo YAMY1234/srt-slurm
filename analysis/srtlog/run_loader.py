@@ -113,10 +113,7 @@ class RunLoader:
             BenchmarkRun object or None if loading failed
         """
         # Handle both relative and absolute paths
-        if not os.path.isabs(run_dir):
-            run_path = os.path.join(self.logs_dir, run_dir)
-        else:
-            run_path = run_dir
+        run_path = os.path.join(self.logs_dir, run_dir) if not os.path.isabs(run_dir) else run_dir
 
         if not os.path.exists(run_path):
             logger.error(f"Run directory does not exist: {run_path}")
@@ -146,10 +143,7 @@ class RunLoader:
             True if {jobid}.json exists, False otherwise
         """
         # Handle both relative and absolute paths
-        if not os.path.isabs(run_dir):
-            run_path = os.path.join(self.logs_dir, run_dir)
-        else:
-            run_path = run_dir
+        run_path = os.path.join(self.logs_dir, run_dir) if not os.path.isabs(run_dir) else run_dir
 
         dirname = os.path.basename(run_path)
         job_id = dirname.split("_")[0]
@@ -212,10 +206,18 @@ class RunLoader:
         Looks for directories like "sa-bench_isl_1024_osl_1024/" or "vllm_isl_1024_osl_1024/" and parses JSON files.
         Uses parquet caching to avoid re-parsing on subsequent loads.
 
+        Checks both the run directory and the logs/ subdirectory for benchmark results.
+
         Args:
             run: BenchmarkRun object to populate with results
         """
         run_path = run.metadata.path
+
+        # Check both run_path and run_path/logs for benchmark results
+        search_paths = [run_path]
+        logs_subdir = os.path.join(run_path, "logs")
+        if os.path.exists(logs_subdir):
+            search_paths.append(logs_subdir)
 
         # Initialize cache manager
         cache_mgr = CacheManager(run_path)
@@ -274,55 +276,56 @@ class RunLoader:
         # Cache miss or invalid - parse from JSON files
         for pattern_str in pattern_strs:
             profiler_pattern = re.compile(pattern_str)
-            for entry in os.listdir(run_path):
-                if profiler_pattern.match(entry):
-                    result_dir = os.path.join(run_path, entry)
-                    if os.path.isdir(result_dir):
-                        results = self._parse_profiler_results(result_dir)
-                        run.profiler.add_benchmark_results(results)
+            for search_path in search_paths:
+                for entry in os.listdir(search_path):
+                    if profiler_pattern.match(entry):
+                        result_dir = os.path.join(search_path, entry)
+                        if os.path.isdir(result_dir):
+                            results = self._parse_profiler_results(result_dir)
+                            run.profiler.add_benchmark_results(results)
 
-                        # Save to cache
-                        if results["concurrencies"]:
-                            # Convert to DataFrame for caching - cache ALL parsed fields
-                            cache_data = {
-                                "concurrency": results["concurrencies"],
-                                "output_tps": results["output_tps"],
-                                "mean_itl_ms": results["mean_itl_ms"],
-                                "mean_ttft_ms": results["mean_ttft_ms"],
-                                "request_rate": results["request_rate"],
-                            }
+                            # Save to cache
+                            if results["concurrencies"]:
+                                # Convert to DataFrame for caching - cache ALL parsed fields
+                                cache_data = {
+                                    "concurrency": results["concurrencies"],
+                                    "output_tps": results["output_tps"],
+                                    "mean_itl_ms": results["mean_itl_ms"],
+                                    "mean_ttft_ms": results["mean_ttft_ms"],
+                                    "request_rate": results["request_rate"],
+                                }
 
-                            # Add all optional fields if they have data
-                            optional_fields = {
-                                "mean_tpot_ms": "mean_tpot_ms",
-                                "total_tps": "total_tps",
-                                "request_throughput": "request_throughput",
-                                "request_goodput": "request_goodput",
-                                "mean_e2el_ms": "mean_e2el_ms",
-                                "median_ttft_ms": "median_ttft_ms",
-                                "median_tpot_ms": "median_tpot_ms",
-                                "median_itl_ms": "median_itl_ms",
-                                "median_e2el_ms": "median_e2el_ms",
-                                "p99_ttft_ms": "p99_ttft_ms",
-                                "p99_tpot_ms": "p99_tpot_ms",
-                                "p99_itl_ms": "p99_itl_ms",
-                                "p99_e2el_ms": "p99_e2el_ms",
-                                "std_ttft_ms": "std_ttft_ms",
-                                "std_tpot_ms": "std_tpot_ms",
-                                "std_itl_ms": "std_itl_ms",
-                                "std_e2el_ms": "std_e2el_ms",
-                                "total_input_tokens": "total_input_tokens",
-                                "total_output_tokens": "total_output_tokens",
-                            }
+                                # Add all optional fields if they have data
+                                optional_fields = {
+                                    "mean_tpot_ms": "mean_tpot_ms",
+                                    "total_tps": "total_tps",
+                                    "request_throughput": "request_throughput",
+                                    "request_goodput": "request_goodput",
+                                    "mean_e2el_ms": "mean_e2el_ms",
+                                    "median_ttft_ms": "median_ttft_ms",
+                                    "median_tpot_ms": "median_tpot_ms",
+                                    "median_itl_ms": "median_itl_ms",
+                                    "median_e2el_ms": "median_e2el_ms",
+                                    "p99_ttft_ms": "p99_ttft_ms",
+                                    "p99_tpot_ms": "p99_tpot_ms",
+                                    "p99_itl_ms": "p99_itl_ms",
+                                    "p99_e2el_ms": "p99_e2el_ms",
+                                    "std_ttft_ms": "std_ttft_ms",
+                                    "std_tpot_ms": "std_tpot_ms",
+                                    "std_itl_ms": "std_itl_ms",
+                                    "std_e2el_ms": "std_e2el_ms",
+                                    "total_input_tokens": "total_input_tokens",
+                                    "total_output_tokens": "total_output_tokens",
+                                }
 
-                            for result_key, cache_key in optional_fields.items():
-                                if results.get(result_key):
-                                    cache_data[cache_key] = results[result_key]
+                                for result_key, cache_key in optional_fields.items():
+                                    if results.get(result_key):
+                                        cache_data[cache_key] = results[result_key]
 
-                            cache_df = pd.DataFrame(cache_data)
-                            cache_mgr.save_to_cache("benchmark_results", cache_df, source_patterns)
+                                cache_df = pd.DataFrame(cache_data)
+                                cache_mgr.save_to_cache("benchmark_results", cache_df, source_patterns)
 
-                        return  # Found results, stop searching
+                            return  # Found results, stop searching
 
     def _parse_profiler_results(self, result_dir: str) -> dict:
         """Parse profiler result JSON files.
@@ -602,7 +605,7 @@ class RunLoader:
 
         try:
             # Read existing JSON
-            with open(json_path, "r") as f:
+            with open(json_path) as f:
                 json_data = json.load(f)
 
             # Update tags

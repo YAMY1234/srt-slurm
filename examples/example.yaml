@@ -67,7 +67,7 @@ benchmark:
   isl: 1024                  # Input sequence length
   osl: 1024                  # Output sequence length
   concurrencies: [256, 512]  # Concurrency levels to test
-  req_rate: "inf"            # Request rate ("inf" for maximum throughput)
+  req_rate: "inf"            # Request rate ("inf" for max throughput, or number like "100")
 
 # Notes:
 # - All SGLang flags are passed directly to the SGLang CLI (--flag-name value)

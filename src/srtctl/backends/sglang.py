@@ -1,403 +1,302 @@
-#!/usr/bin/env python3
 # SPDX-FileCopyrightText: Copyright (c) 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
 """
-SGLang backend support.
+SGLang backend configuration.
+
+Implements BackendProtocol for SGLang inference serving with prefill/decode disaggregation.
 """
 
-import logging
-import os
-import tempfile
-import yaml
-from datetime import datetime
-from jinja2 import Template
+import builtins
+import json
+from collections.abc import Sequence
+from dataclasses import field
 from pathlib import Path
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    ClassVar,
+    Literal,
+)
 
-import srtctl
-from srtctl.core.config import get_srtslurm_setting
-from srtctl.core.sweep import expand_template
+from marshmallow import Schema
+from marshmallow_dataclass import dataclass
 
-from .base import Backend
+if TYPE_CHECKING:
+    from srtctl.core.runtime import RuntimeContext
+    from srtctl.core.topology import Endpoint, Process
+
+# Type alias for worker modes
+WorkerMode = Literal["prefill", "decode", "agg"]
 
 
-class SGLangBackend(Backend):
-    """SGLang backend for distributed serving."""
+@dataclass(frozen=True)
+class SGLangServerConfig:
+    """SGLang server CLI configuration per mode (prefill/decode/aggregated).
 
-    def __init__(self, config: dict, setup_script: str = None):
-        """Initialize SGLang backend.
+    Each mode can have its own configuration dict that gets converted
+    to CLI flags when starting the worker.
+    """
 
-        Args:
-            config: Full user configuration dict
-            setup_script: Optional custom setup script name in configs directory
+    prefill: dict[str, Any] | None = None
+    decode: dict[str, Any] | None = None
+    aggregated: dict[str, Any] | None = None
+
+    Schema: ClassVar[type[Schema]] = Schema
+
+
+@dataclass(frozen=True)
+class SGLangProtocol:
+    """SGLang protocol - implements BackendProtocol.
+
+    This frozen dataclass both holds configuration AND implements the
+    BackendProtocol methods for process allocation and launching.
+
+    Example YAML:
+        backend:
+          type: sglang
+          prefill_environment:
+            CUDA_LAUNCH_BLOCKING: "1"
+          sglang_config:
+            prefill:
+              mem-fraction-static: 0.8
+              chunked-prefill-size: 8192
+            decode:
+              mem-fraction-static: 0.9
+    """
+
+    type: Literal["sglang"] = "sglang"
+    gpu_type: str | None = None
+
+    # Environment variables per mode
+    prefill_environment: dict[str, str] = field(default_factory=dict)
+    decode_environment: dict[str, str] = field(default_factory=dict)
+    aggregated_environment: dict[str, str] = field(default_factory=dict)
+
+    # SGLang server CLI config per mode
+    sglang_config: SGLangServerConfig | None = None
+
+    # KV events config - enables --kv-events-config with auto-allocated ports
+    # Per-mode: {"prefill": true, "decode": {"publisher": "zmq", "topic": "custom"}}
+    # Or global: true (enables for prefill+decode with defaults)
+    kv_events_config: bool | dict[str, Any] | None = None
+
+    Schema: ClassVar[builtins.type[Schema]] = Schema
+
+    # =========================================================================
+    # BackendProtocol Implementation
+    # =========================================================================
+
+    def get_config_for_mode(self, mode: WorkerMode) -> dict[str, Any]:
+        """Get merged config dict for a worker mode."""
+        if not self.sglang_config:
+            return {}
+
+        if mode == "prefill":
+            return dict(self.sglang_config.prefill or {})
+        elif mode == "decode":
+            return dict(self.sglang_config.decode or {})
+        elif mode == "agg":
+            return dict(self.sglang_config.aggregated or {})
+        return {}
+
+    def get_environment_for_mode(self, mode: WorkerMode) -> dict[str, str]:
+        """Get environment variables for a worker mode."""
+        if mode == "prefill":
+            return dict(self.prefill_environment)
+        elif mode == "decode":
+            return dict(self.decode_environment)
+        elif mode == "agg":
+            return dict(self.aggregated_environment)
+        return {}
+
+    def is_grpc_mode(self, mode: WorkerMode) -> bool:
+        """Check if gRPC mode is enabled for a worker mode."""
+        config = self.get_config_for_mode(mode)
+        return config.get("grpc-mode", False)
+
+    def get_kv_events_config_for_mode(self, mode: WorkerMode) -> dict[str, str] | None:
+        """Get kv-events config for a worker mode.
+
+        Returns None if disabled, or dict with publisher/topic if enabled.
         """
-        super().__init__(config)
-        self.setup_script = setup_script
-
-    def generate_config_file(self, params: dict = None) -> Path | None:
-        """Generate SGLang YAML config file.
-
-        Args:
-            params: Optional sweep parameters for template expansion
-
-        Returns:
-            Path to generated config file
-        """
-        if "sglang_config" not in self.backend_config:
+        if not self.kv_events_config:
             return None
 
-        sglang_cfg = self.backend_config["sglang_config"]
+        # Global bool: enable for prefill+decode with defaults
+        if self.kv_events_config is True:
+            if mode in ("prefill", "decode"):
+                return {"publisher": "zmq", "topic": "kv-events"}
+            return None
 
-        # Expand templates if sweeping
-        if params:
-            sglang_cfg = expand_template(sglang_cfg, params)
-            logging.info(f"Expanded config with params: {params}")
+        # Per-mode config dict
+        if isinstance(self.kv_events_config, dict):
+            mode_cfg = self.kv_events_config.get(mode)
+            if mode_cfg is None:
+                return None
+            if mode_cfg is True:
+                return {"publisher": "zmq", "topic": "kv-events"}
+            if isinstance(mode_cfg, dict):
+                # Merge with defaults
+                return {"publisher": "zmq", "topic": "kv-events", **mode_cfg}
 
-        # Validate that all keys use dashes, not underscores
-        for mode in ["prefill", "decode", "aggregated"]:
-            if mode in sglang_cfg and sglang_cfg[mode]:
-                for key in sglang_cfg[mode].keys():
-                    if "_" in key:
-                        raise ValueError(
-                            f"Invalid key '{key}' in sglang_config.{mode}: "
-                            f"Keys must use dashes (kebab-case), not underscores. "
-                            f"Use '{key.replace('_', '-')}' instead."
-                        )
+        return None
 
-        # Extract prefill, decode, and aggregated configs (no conversion needed - already using dashes)
-        result = {}
-        for mode in ["prefill", "decode", "aggregated"]:
-            if mode in sglang_cfg:
-                result[mode] = sglang_cfg[mode]
+    def allocate_endpoints(
+        self,
+        num_prefill: int,
+        num_decode: int,
+        num_agg: int,
+        gpus_per_prefill: int,
+        gpus_per_decode: int,
+        gpus_per_agg: int,
+        gpus_per_node: int,
+        available_nodes: Sequence[str],
+    ) -> list["Endpoint"]:
+        """Allocate endpoints to nodes."""
+        from srtctl.core.topology import allocate_endpoints
 
-        # Add environment variables as top-level keys
-        for mode in ["prefill", "decode", "aggregated"]:
-            env_vars = self.get_environment_vars(mode)
-            if env_vars:
-                result[f"{mode}_environment"] = env_vars
+        return allocate_endpoints(
+            num_prefill=num_prefill,
+            num_decode=num_decode,
+            num_agg=num_agg,
+            gpus_per_prefill=gpus_per_prefill,
+            gpus_per_decode=gpus_per_decode,
+            gpus_per_agg=gpus_per_agg,
+            gpus_per_node=gpus_per_node,
+            available_nodes=available_nodes,
+        )
 
-        # Write to temp file
-        fd, temp_path = tempfile.mkstemp(suffix=".yaml", prefix="sglang_config_")
-        with os.fdopen(fd, "w") as f:
-            yaml.dump(result, f, default_flow_style=False)
+    def endpoints_to_processes(
+        self,
+        endpoints: list["Endpoint"],
+        base_sys_port: int = 8081,
+    ) -> list["Process"]:
+        """Convert endpoints to processes."""
+        from srtctl.core.topology import endpoints_to_processes
 
-        logging.info(f"Generated SGLang config: {temp_path}")
-        return Path(temp_path)
+        return endpoints_to_processes(endpoints, base_sys_port=base_sys_port)
 
-    def render_command(self, mode: str, config_path: Path = None) -> str:
-        """Render full SGLang command with all flags inlined.
-
-        Args:
-            mode: "prefill" or "decode"
-            config_path: Path to generated SGLang config file
-
-        Returns:
-            Multi-line bash command string
-        """
-        lines = []
-
-        # Environment variables
-        env_vars = self.get_environment_vars(mode) or {}
-        for key, val in env_vars.items():
-            lines.append(f"{key}={val} \\")
-
-        # Python command - use sglang.launch_server when profiler != none, dynamo.sglang otherwise
-        profiling_type = (self.config.get("profiling") or {}).get("type") or "none"
-        nsys_prefix = "nsys profile -t cuda,nvtx --cuda-graph-trace=node -c cudaProfilerApi --capture-range-end stop --force-overwrite true"
-        if profiling_type == "nsys":
-            lines.append(f"{nsys_prefix} python3 -m sglang.launch_server \\")
-        elif profiling_type == "torch":
-            lines.append("python3 -m sglang.launch_server \\")
-        else:
-            lines.append("python3 -m dynamo.sglang \\")
-
-        # Inline all SGLang flags from config file
-        if config_path:
-            with open(config_path) as f:
-                sglang_config = yaml.load(f, Loader=yaml.FullLoader)
-
-            mode_config = sglang_config.get(mode, {})
-            flag_lines = self._config_to_flags(mode_config)
-            lines.extend(flag_lines)
-
-        # Add coordination flags
-        coord_flags = self._get_coordination_flags(mode)
-        lines.extend(coord_flags)
-
-        return "\n".join(lines)
-
-    def _config_to_flags(self, config: dict) -> list[str]:
-        """Convert config dict to CLI flags.
+    def build_worker_command(
+        self,
+        process: "Process",
+        endpoint_processes: list["Process"],
+        runtime: "RuntimeContext",
+        frontend_type: str = "dynamo",
+        profiling_enabled: bool = False,
+        nsys_prefix: list[str] | None = None,
+        dump_config_path: Path | None = None,
+    ) -> list[str]:
+        """Build the command to start an SGLang worker process.
 
         Args:
-            config: SGLang config dict for this mode
-
-        Returns:
-            List of flag strings with backslash continuations
+            process: The process to start
+            endpoint_processes: All processes for this endpoint (for multi-node)
+            runtime: Runtime context with paths and settings
+            frontend_type: Frontend type - "sglang" uses sglang.launch_server, "dynamo" uses dynamo.sglang
+            profiling_enabled: Whether profiling is enabled (forces sglang.launch_server)
+            nsys_prefix: Optional nsys profiling command prefix
+            dump_config_path: Path to dump config JSON
         """
-        lines = []
-        profiling_type = (self.config.get("profiling") or {}).get("type") or "none"
+        from srtctl.core.slurm import get_hostname_ip
 
-        for key, value in sorted(config.items()):
-            # Convert underscores to hyphens
-            flag_name = key.replace("_", "-")
+        mode = process.endpoint_mode
+        config = self.get_config_for_mode(mode)
 
-            # Always pass disaggregation-mode so profiling runs in PD mode
+        # Determine if multi-node
+        endpoint_nodes = list(dict.fromkeys(p.node for p in endpoint_processes))
+        is_multi_node = len(endpoint_nodes) > 1
 
-            if isinstance(value, bool):
-                if value:
-                    lines.append(f"    --{flag_name} \\")
-            elif isinstance(value, list):
-                values_str = " ".join(str(v) for v in value)
-                lines.append(f"    --{flag_name} {values_str} \\")
-            else:
-                lines.append(f"    --{flag_name} {value} \\")
+        # Get leader IP for distributed init
+        leader_ip = get_hostname_ip(endpoint_nodes[0])
+        dist_init_port = 29500
 
-        return lines
+        # Choose Python module
+        # When profiling is enabled, always use sglang.launch_server (not dynamo.sglang)
+        use_sglang = frontend_type == "sglang" or profiling_enabled
+        python_module = "sglang.launch_server" if use_sglang else "dynamo.sglang"
 
-    def _get_coordination_flags(self, mode: str) -> list[str]:
-        """Get multi-node coordination flags.
+        # Get served model name from config
+        served_model_name = runtime.model_path.name
+        if self.sglang_config:
+            for cfg in [self.sglang_config.prefill, self.sglang_config.aggregated]:
+                if cfg:
+                    name = cfg.get("served-model-name") or cfg.get("served_model_name")
+                    if name:
+                        served_model_name = name
+                        break
 
-        Args:
-            mode: "prefill" or "decode"
+        # Start with nsys prefix if provided
+        cmd: list[str] = list(nsys_prefix) if nsys_prefix else []
 
-        Returns:
-            List of coordination flag strings
-        """
-        lines = []
+        cmd.extend(
+            [
+                "python3",
+                "-m",
+                python_module,
+                "--model-path",
+                str(runtime.model_path),
+                "--served-model-name",
+                served_model_name,
+                "--host",
+                "0.0.0.0",
+            ]
+        )
 
-        # Determine nnodes based on mode
-        if self.is_disaggregated():
-            nnodes = self.resources["prefill_nodes"] if mode == "prefill" else self.resources["decode_nodes"]
-        else:
-            nnodes = self.resources["agg_nodes"]
+        # Only pass --port when using sglang.launch_server (not dynamo.sglang)
+        # dynamo.sglang uses DYN_SYSTEM_PORT env var instead
+        if use_sglang:
+            cmd.extend(["--port", str(process.http_port)])
 
-        # Coordination flags
-        lines.append("    --dist-init-addr $HOST_IP_MACHINE:$PORT \\")
-        lines.append(f"    --nnodes {nnodes} \\")
-        lines.append("    --node-rank $RANK \\")
+        # Add disaggregation mode for prefill/decode workers (both dynamo and sglang frontend)
+        if mode != "agg":
+            cmd.extend(["--disaggregation-mode", mode])
+            # Bootstrap port only needed for sglang frontend (dynamo handles internally)
+            if frontend_type == "sglang" and mode == "prefill" and process.bootstrap_port is not None:
+                cmd.extend(["--disaggregation-bootstrap-port", str(process.bootstrap_port)])
 
-        return lines
-
-    def _get_enable_config_dump(self) -> bool:
-        """Get enable_config_dump value, handling profiling mode.
-
-        Returns:
-            True if config dump should be enabled, False otherwise
-        """
-        # Get value from config (defaults to True in schema)
-        enable_config_dump = self.config.get("enable_config_dump", True)
-
-        # Auto-disable when profiling is enabled (unless explicitly set to True)
-        profiling_type = (self.config.get("profiling") or {}).get("type") or "none"
-        if profiling_type != "none":
-            # When profiling, disable config dump by default
-            # User can explicitly set enable_config_dump: true to override
-            return False
-
-        return enable_config_dump
-
-    def generate_slurm_script(self, config_path: Path = None, timestamp: str = None, recipe_name: str = None) -> tuple[Path, str]:
-        """Generate SLURM job script from Jinja template.
-
-        Args:
-            config_path: Path to SGLang config file
-            timestamp: Timestamp for job submission
-            recipe_name: Recipe name to append to log directory name
-
-        Returns:
-            Tuple of (script_path, rendered_script_content)
-        """
-        if timestamp is None:
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-
-        # Determine mode and node counts
-        is_aggregated = not self.is_disaggregated()
-
-        if is_aggregated:
-            agg_nodes = self.resources["agg_nodes"]
-            agg_workers = self.resources["agg_workers"]
-            prefill_nodes = 0
-            decode_nodes = 0
-            prefill_workers = 0
-            decode_workers = 0
-            total_nodes = agg_nodes
-        else:
-            prefill_nodes = self.resources["prefill_nodes"]
-            decode_nodes = self.resources["decode_nodes"]
-            prefill_workers = self.resources["prefill_workers"]
-            decode_workers = self.resources["decode_workers"]
-            agg_nodes = 0
-            agg_workers = 0
-            total_nodes = prefill_nodes + decode_nodes
-
-        # Get SLURM settings
-        job_name = self.config.get("name", "srtctl-job")
-        account = self.slurm.get("account") or get_srtslurm_setting("default_account")
-        partition = self.slurm.get("partition") or get_srtslurm_setting("default_partition")
-        time_limit = self.slurm.get("time_limit") or get_srtslurm_setting("default_time_limit", "04:00:00")
-
-        # Get resource settings from srtslurm.yaml if available
-        gpus_per_node = get_srtslurm_setting("gpus_per_node", self.resources.get("gpus_per_node"))
-        network_interface = get_srtslurm_setting("network_interface", None)
-
-        # Get backend settings
-        gpu_type = self.backend_config.get("gpu_type", "h100")
-
-        # Benchmark config
-        benchmark_config = self.config.get("benchmark", {})
-        bench_type = benchmark_config.get("type", "manual")
-        do_benchmark = bench_type != "manual"
-
-        # Parse benchmark args if applicable
-        parsable_config = ""
-        if bench_type == "sa-bench":
-            isl = benchmark_config.get("isl")
-            osl = benchmark_config.get("osl")
-            concurrencies = benchmark_config.get("concurrencies")
-            req_rate = benchmark_config.get("req_rate", "inf")
-
-            if isinstance(concurrencies, list):
-                concurrency_str = "x".join(str(c) for c in concurrencies)
-            else:
-                concurrency_str = str(concurrencies)
-
-            parsable_config = f"{isl} {osl} {concurrency_str} {req_rate}"
-        elif bench_type == "longbenchv2":
-            # LongBench-v2 args: num_examples max_tokens max_context_length num_threads categories repeat
-            # bench.sh expects positional args in this order after the standard 4 args
-            # Use "_" as placeholder for None values to preserve arg positions in bash
-            num_examples = benchmark_config.get("num_examples")
-            max_tokens = benchmark_config.get("max_tokens")
-            max_context_length = benchmark_config.get("max_context_length")
-            num_threads = benchmark_config.get("num_threads")
-            categories = benchmark_config.get("categories")
-            repeat = benchmark_config.get("repeat")
-
-            # Use "_" placeholder to preserve positional args (bash will handle defaults)
-            num_examples = "_" if num_examples is None else str(num_examples)
-            max_tokens = "_" if max_tokens is None else str(max_tokens)
-            max_context_length = "_" if max_context_length is None else str(max_context_length)
-            num_threads = "_" if num_threads is None else str(num_threads)
-            categories = "_" if categories is None else str(categories)
-            repeat = "_" if repeat is None else str(repeat)
-
-            parsable_config = f"{num_examples} {max_tokens} {max_context_length} {num_threads} {categories} {repeat}"
-
-        # Config directory should point to where deepep_config.json lives
-        # This is typically the configs/ directory in the yaml-config repo
-        yaml_config_root = Path(srtctl.__file__).parent.parent.parent
-
-        # Log directory - check srtslurm.yaml first, then fall back to default
-        srtctl_root_setting = get_srtslurm_setting("srtctl_root")
-        if srtctl_root_setting:
-            srtctl_root = Path(srtctl_root_setting)
-        else:
-            # Fall back to default: current yaml-config directory (which contains scripts/)
-            srtctl_root = yaml_config_root
-
-        # Use srtctl_root for config_dir_path so it respects srtslurm.yaml setting
-        config_dir_path = srtctl_root / "configs"
-        log_dir_path = srtctl_root / "logs"
-
-        # Build profiling env injections 
-        profiling_cfg = self.config.get("profiling") or {}
-
-        def build_env_str(cfg: dict) -> str:
-            parts: list[str] = []
-            if "isl" in cfg and cfg["isl"] is not None:
-                parts.append(f"PROFILE_ISL={cfg['isl']}")
-            if "osl" in cfg and cfg["osl"] is not None:
-                parts.append(f"PROFILE_OSL={cfg['osl']}")
-            if "concurrency" in cfg and cfg["concurrency"] is not None:
-                parts.append(f"PROFILE_CONCURRENCY={cfg['concurrency']}")
-            if "start_step" in cfg and cfg["start_step"] is not None:
-                parts.append(f"PROFILE_START_STEP={cfg['start_step']}")
-            if "stop_step" in cfg and cfg["stop_step"] is not None:
-                parts.append(f"PROFILE_STOP_STEP={cfg['stop_step']}")
-            return " ".join(parts)
-
-        # Use the same profiling spec for both prefill and decode; in PD
-        # disaggregation mode this single spec drives both sides.
-        prefill_profile_env = build_env_str(profiling_cfg)
-        decode_profile_env = build_env_str(profiling_cfg)
-
-        profiler_mode = profiling_cfg.get("type") or "none"
-        # Template variables
-        template_vars = {
-            "job_name": job_name,
-            "total_nodes": total_nodes,
-            "account": account,
-            "time_limit": time_limit,
-            "prefill_nodes": prefill_nodes,
-            "decode_nodes": decode_nodes,
-            "prefill_workers": prefill_workers,
-            "decode_workers": decode_workers,
-            "agg_nodes": agg_nodes,
-            "agg_workers": agg_workers,
-            "is_aggregated": is_aggregated,
-            "model_dir": self.model.get("path"),
-            "config_dir": str(config_dir_path),
-            "container_image": self.model.get("container"),
-            "gpus_per_node": gpus_per_node,
-            "network_interface": network_interface,
-            "gpu_type": gpu_type,
-            "partition": partition,
-            "enable_multiple_frontends": self.backend_config.get("enable_multiple_frontends", True),
-            "num_additional_frontends": self.backend_config.get("num_additional_frontends", 9),
-            "use_sglang_router": self.backend_config.get("use_sglang_router", False),
-            "do_benchmark": do_benchmark,
-            "benchmark_type": bench_type,
-            "benchmark_arg": parsable_config,
-            "timestamp": timestamp,
-            # Config dump enabled by default (True in schema)
-            # Auto-disabled when profiling unless explicitly enabled
-            "enable_config_dump": self._get_enable_config_dump(),
-            "log_dir_prefix": str(log_dir_path),  # Absolute path to logs directory
-            "profiler": profiler_mode,
-            "prefill_profile_env": prefill_profile_env,
-            "decode_profile_env": decode_profile_env,
-            "setup_script": self.setup_script,
-            "use_gpus_per_node_directive": get_srtslurm_setting("use_gpus_per_node_directive", True),
-            "use_segment_sbatch_directive": get_srtslurm_setting("use_segment_sbatch_directive", True),
-            "extra_container_mounts": ",".join(self.config.get("extra_mount") or []),
-            "recipe_name": recipe_name or "",
-        }
-
-        # Select template based on mode
-        if is_aggregated:
-            template_name = "job_script_template_agg.j2"
-        else:
-            template_name = "job_script_template_disagg.j2"
-
-        # Find template path - check srtslurm.yaml first, then fall back to default location
-        srtctl_root = get_srtslurm_setting("srtctl_root")
-
-        if srtctl_root:
-            # User specified srtctl_root in srtslurm.yaml
-            template_path = Path(srtctl_root) / "scripts" / "templates" / template_name
-        else:
-            # Fall back to default: current yaml-config directory (which contains scripts/)
-            yaml_config_root = Path(srtctl.__file__).parent.parent.parent
-            template_path = yaml_config_root / "scripts" / "templates" / template_name
-
-        if not template_path.exists():
-            raise FileNotFoundError(
-                f"Template not found: {template_path}\n"
-                f"Set 'srtctl_root' in srtslurm.yaml to point to your srtctl repo.\n"
-                f"Example: srtctl_root: /mnt/lustre01/users/slurm-shared/ishan/sweepr"
+        # Add multi-node coordination flags
+        if is_multi_node:
+            node_rank = endpoint_nodes.index(process.node)
+            cmd.extend(
+                [
+                    "--dist-init-addr",
+                    f"{leader_ip}:{dist_init_port}",
+                    "--nnodes",
+                    str(len(endpoint_nodes)),
+                    "--node-rank",
+                    str(node_rank),
+                ]
             )
 
-        # Render template
-        with open(template_path) as f:
-            template = Template(f.read())
+        # Add config dump path (not when using sglang frontend)
+        if dump_config_path and frontend_type != "sglang":
+            cmd.extend(["--dump-config-to", str(dump_config_path)])
 
-        rendered_script = template.render(**template_vars)
+        # Add kv-events-config if enabled for this mode and we have an allocated port
+        kv_cfg = self.get_kv_events_config_for_mode(mode)
+        if kv_cfg and process.kv_events_port is not None:
+            # Add the endpoint with the allocated port
+            kv_cfg["endpoint"] = f"tcp://*:{process.kv_events_port}"
+            cmd.extend(["--kv-events-config", json.dumps(kv_cfg)])
 
-        # Write to temporary file
-        fd, temp_path = tempfile.mkstemp(suffix=".sh", prefix="slurm_job_")
-        with os.fdopen(fd, "w") as f:
-            f.write(rendered_script)
+        # Add all config flags
+        cmd.extend(_config_to_cli_args(config))
 
-        logging.info(f"Generated SLURM job script: {temp_path}")
-        return Path(temp_path), rendered_script
+        return cmd
+
+
+def _config_to_cli_args(config: dict[str, Any]) -> list[str]:
+    """Convert config dict to CLI arguments."""
+    args: list[str] = []
+    for key, value in sorted(config.items()):
+        flag_name = key.replace("_", "-")
+        if isinstance(value, bool):
+            if value:
+                args.append(f"--{flag_name}")
+        elif isinstance(value, list):
+            args.append(f"--{flag_name}")
+            args.extend(str(v) for v in value)
+        elif value is not None:
+            args.extend([f"--{flag_name}", str(value)])
+    return args

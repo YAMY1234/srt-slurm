@@ -1,5 +1,21 @@
 # Installation
 
+## Table of Contents
+
+- [Prerequisites](#prerequisites)
+- [Clone and Install](#clone-and-install)
+- [Gather your cluster user and target partition](#gather-your-cluster-user-and-target-partition)
+- [Run Setup](#run-setup)
+- [Configure srtslurm.yaml](#configure-srtslurmyaml)
+  - [Adding Model Paths](#adding-model-paths)
+  - [Adding Containers](#adding-containers)
+  - [Complete srtslurm.yaml Reference](#complete-srtslurmyaml-reference)
+- [Create a Job Config](#create-a-job-config)
+- [Submit the Job](#submit-the-job)
+- [Custom Setup Scripts](#custom-setup-scripts)
+
+---
+
 ## Prerequisites
 
 - Access to a SLURM cluster with GPU nodes
@@ -11,12 +27,14 @@
 ## Clone and Install
 
 ```bash
-git clone https://github.com/your-org/srtctl.git
-cd srtctl
+git clone https://github.com/ishandhanani/srt-slurm.git
+cd srt-slurm
 pip install -e .
 ```
 
 ## Gather your cluster user and target partition
+
+These commands might not work on all clusters. You can use AI to figure out the right set of commands for your cluster.
 
 ```bash
 # user
@@ -27,25 +45,26 @@ sinfo
 
 ## Run Setup
 
+If you are trying to deploy onto Grace (GH200, GB200, etc.), you need to use the `aarch64` architecture. Otherwise use `x86_64`.
+
 ```bash
-make setup
+make setup ARCH=aarch64  # or ARCH=x86_64
 ```
 
 The setup will:
 
-1. Download NATS/ETCD binaries
+1. Download NATS/ETCD binaries for your architecture
 2. Prompt you for cluster settings:
    - SLURM account (default: `restricted`)
    - SLURM partition (default: `batch`)
    - GPUs per node (default: `4`)
    - Time limit (default: `4:00:00`)
 3. Create `srtslurm.yaml` with your settings
-
-Dynamo 0.7.0 is now available on PyPI and will be installed automatically from pip when workers start.
+4. Auto-detect and set `srtctl_root` path
 
 ## Configure srtslurm.yaml
 
-After setup, edit `srtslurm.yaml` to add model paths and containers:
+After setup, edit `srtslurm.yaml` to add model paths, containers, and cluster-specific settings:
 
 ### Adding Model Paths
 
@@ -55,7 +74,6 @@ The `model_paths` section maps short aliases to full filesystem paths:
 model_paths:
   deepseek-r1: "/mnt/lustre/models/DeepSeek-R1"
   deepseek-r1-fp4: "/mnt/lustre/models/deepseek-r1-0528-fp4-v2"
-  llama-70b: "/mnt/lustre/models/Llama-3-70B"
 ```
 
 Models must be accessible from all compute nodes (typically on a shared filesystem like Lustre or GPFS).
@@ -66,37 +84,46 @@ The `containers` section maps version aliases to `.sqsh` container images:
 
 ```yaml
 containers:
-  latest: "/mnt/containers/lmsysorg+sglang+v0.5.5.sqsh"
-  stable: "/mnt/containers/lmsysorg+sglang+v0.5.4.sqsh"
+  container1: "/mnt/containers/lmsysorg+sglang+v0.5.5.sqsh"
+  container2: "/mnt/containers/lmsysorg+sglang+v0.5.4.sqsh"
 ```
 
 To create a container image from Docker:
 
 ```bash
 enroot import docker://lmsysorg/sglang:v0.5.5
-mv lmsysorg+sglang+v0.5.5.sqsh /mnt/containers/
 ```
 
-### Cluster Compatibility Settings
+### Complete srtslurm.yaml Reference
 
-Some SLURM clusters don't support certain SBATCH directives. If you encounter errors during job submission, you may need to adjust these settings:
-
-#### GPU Resource Specification
-
-If you see this error when submitting jobs:
-
-```
-sbatch: error: Invalid generic resource (gres) specification
-```
-
-Your cluster doesn't support the `--gpus-per-node` directive. Disable it in `srtslurm.yaml`:
+Here's a complete example of all available options:
 
 ```yaml
-# SLURM directive compatibility
-use_gpus_per_node_directive: false
-```
+# Default SLURM settings
+default_account: "your-account"
+default_partition: "batch"
+default_time_limit: "4:00:00"
 
-This will omit the `#SBATCH --gpus-per-node` directive from generated job scripts while keeping all other functionality intact.
+# Resource defaults
+gpus_per_node: 4
+
+# SLURM directive compatibility
+use_gpus_per_node_directive: true # Set false if cluster doesn't support --gpus-per-node
+use_segment_sbatch_directive: true # Set false if cluster doesn't support --segment
+
+# Path to srtctl repo root (auto-set by make setup)
+srtctl_root: "/path/to/srtctl"
+
+# Model path aliases
+model_paths:
+  deepseek-r1: "/models/DeepSeek-R1"
+  llama-70b: "/models/Llama-3-70B"
+
+# Container aliases
+containers:
+  latest: "/containers/sglang-latest.sqsh"
+  stable: "/containers/sglang-stable.sqsh"
+```
 
 ## Create a Job Config
 
@@ -111,8 +138,8 @@ model:
   precision: "fp8"
 
 extra_mount: # add this if you need to mount extra directories to the container
-- "/local-dir1:/container-dir1"
-- "/local-dir2:/container-dir2"
+  - "/local-dir1:/container-dir1"
+  - "/local-dir2:/container-dir2"
 
 resources:
   gpu_type: "gb200"
@@ -149,39 +176,10 @@ benchmark:
   isl: 1024
   osl: 1024
   concurrencies: [256, 512]
+  req_rate: "inf"
 ```
 
-## Profiling (torch / nsys)
-
-You can enable profiling via a top-level `profiling` section in your job YAML:
-
-```yaml
-profiling:
-  type: "torch"   # one of: "none", "torch", "nsys"
-  prefill:
-    isl: 1024
-    osl: 128
-    concurrency: 24
-  decode:
-    isl: 1024
-    osl: 128
-    concurrency: 256
-
-benchmark:
-  type: "manual"  # Required - profiling and benchmarking are mutually exclusive
-```
-
-See [Profiling](profiling.md) for detailed configuration options, constraints, and output file locations.
-
-## Validate with Dry Run
-
-Always validate before submitting:
-
-```bash
-srtctl dry-run -f configs/my-job.yaml
-```
-
-This validates your config, resolves aliases, generates all files, and saves them to `dry-runs/` without submitting to SLURM.
+See [Configuration Reference](config-reference.md) for all available options.
 
 ## Submit the Job
 
@@ -195,6 +193,16 @@ Output:
 Submitted batch job 12345
 Logs: logs/12345_1P_4D_20251122_143052/
 ```
+
+### Submit with Tags
+
+You can tag runs for easier filtering in the dashboard:
+
+```bash
+srtctl apply -f configs/my-job.yaml --tags experiment,baseline,v2
+```
+
+Tags are saved in the job metadata and can be used to filter runs in analysis.
 
 See [Monitoring](monitoring.md) for how to monitor your job and understand the detailed log structure.
 
@@ -234,6 +242,6 @@ You can run custom initialization scripts on worker nodes before starting SGLang
    srtctl apply -f configs/my-job.yaml --setup-script custom-setup.sh
    ```
 
-The script will be executed on each worker node (prefill, decode, and aggregated) before installing Dynamo from PyPI and starting the SGLang workers. The script must be located in the `configs/` directory, which is mounted into containers at `/configs/`.
+The script will be executed on each worker node (prefill, decode, or aggregated) before installing Dynamo from PyPI and starting the SGLang workers. The script must be located in the `configs/` directory, which is mounted into containers at `/configs/`.
 
 **Note**: Setup scripts only run when you explicitly specify `--setup-script`. No default setup script will run if this flag is omitted.

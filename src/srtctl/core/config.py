@@ -4,52 +4,82 @@
 
 """
 Config loading and resolution with srtslurm.yaml integration.
+
+This module provides:
+- load_config(): Load YAML config, apply cluster defaults, return typed SrtConfig
+- get_srtslurm_setting(): Get cluster-wide settings
 """
 
 import copy
 import logging
-import yaml
 from pathlib import Path
+from typing import Any
+
+import yaml
+
+from .schema import ClusterConfig, SrtConfig
+
+logger = logging.getLogger(__name__)
 
 
-def load_cluster_config() -> dict | None:
+def load_cluster_config() -> dict[str, Any] | None:
     """
     Load cluster configuration from srtslurm.yaml if it exists.
 
+    Searches for srtslurm.yaml in:
+    1. Current working directory
+    2. Parent directories up to 3 levels
+
     Returns None if file doesn't exist (graceful degradation).
     """
-    from .schema import ClusterConfig
+    # Search paths
+    search_paths = [
+        Path.cwd() / "srtslurm.yaml",
+        Path.cwd().parent / "srtslurm.yaml",
+        Path.cwd().parent.parent / "srtslurm.yaml",
+    ]
 
-    # Look for srtslurm.yaml at project root
-    cluster_config_path = Path.cwd() / "srtslurm.yaml"
+    cluster_config_path = None
+    for path in search_paths:
+        if path.exists():
+            cluster_config_path = path
+            break
 
-    if not cluster_config_path.exists():
-        logging.debug("No srtslurm.yaml found - using config as-is")
+    if not cluster_config_path:
+        logger.debug("No srtslurm.yaml found - using config as-is")
         return None
 
     try:
         with open(cluster_config_path) as f:
             raw_config = yaml.safe_load(f)
 
-        # Validate with pydantic
-        validated = ClusterConfig(**raw_config)
-        logging.debug(f"Loaded cluster config from {cluster_config_path}")
-        return validated.model_dump()
+        # Validate with marshmallow schema
+        schema = ClusterConfig.Schema()
+        validated = schema.load(raw_config)
+        logger.debug(f"Loaded cluster config from {cluster_config_path}")
+
+        # Dump back to dict for compatibility
+        return schema.dump(validated)
     except Exception as e:
-        logging.warning(f"Failed to load or validate srtslurm.yaml: {e}")
+        logger.warning(f"Failed to load or validate srtslurm.yaml: {e}")
         return None
 
 
-def resolve_config_with_defaults(user_config: dict, cluster_config: dict | None) -> dict:
+def resolve_config_with_defaults(user_config: dict[str, Any], cluster_config: dict[str, Any] | None) -> dict[str, Any]:
     """
     Resolve user config by applying cluster defaults and aliases.
 
+    This applies:
+    1. Default SLURM settings (account, partition, time_limit)
+    2. Model path alias resolution
+    3. Container alias resolution
+
     Args:
-        user_config: User's YAML config
+        user_config: User's YAML config as dict
         cluster_config: Cluster defaults from srtslurm.yaml (or None)
 
     Returns:
-        Resolved config with all defaults applied
+        Resolved config dict with all defaults applied
     """
     # Deep copy to avoid mutating original
     config = copy.deepcopy(user_config)
@@ -59,49 +89,41 @@ def resolve_config_with_defaults(user_config: dict, cluster_config: dict | None)
 
     # Apply SLURM defaults
     slurm = config.setdefault("slurm", {})
-    if "account" not in slurm and "default_account" in cluster_config:
+    if "account" not in slurm and cluster_config.get("default_account"):
         slurm["account"] = cluster_config["default_account"]
-        logging.debug(f"Applied default account: {slurm['account']}")
+        logger.debug(f"Applied default account: {slurm['account']}")
 
-    if "partition" not in slurm and "default_partition" in cluster_config:
+    if "partition" not in slurm and cluster_config.get("default_partition"):
         slurm["partition"] = cluster_config["default_partition"]
-        logging.debug(f"Applied default partition: {slurm['partition']}")
+        logger.debug(f"Applied default partition: {slurm['partition']}")
 
-    if "time_limit" not in slurm and "default_time_limit" in cluster_config:
+    if "time_limit" not in slurm and cluster_config.get("default_time_limit"):
         slurm["time_limit"] = cluster_config["default_time_limit"]
-        logging.debug(f"Applied default time_limit: {slurm['time_limit']}")
+        logger.debug(f"Applied default time_limit: {slurm['time_limit']}")
 
     # Resolve model path alias
     model = config.get("model", {})
     model_path = model.get("path", "")
 
-    if (
-        cluster_config
-        and "model_paths" in cluster_config
-        and cluster_config["model_paths"] is not None
-        and model_path in cluster_config["model_paths"]
-    ):
-        resolved_path = cluster_config["model_paths"][model_path]
+    model_paths = cluster_config.get("model_paths")
+    if model_paths and model_path in model_paths:
+        resolved_path = model_paths[model_path]
         model["path"] = resolved_path
-        logging.debug(f"Resolved model alias '{model_path}' -> '{resolved_path}'")
+        logger.debug(f"Resolved model alias '{model_path}' -> '{resolved_path}'")
 
     # Resolve container alias
     container = model.get("container", "")
 
-    if (
-        cluster_config
-        and "containers" in cluster_config
-        and cluster_config["containers"] is not None
-        and container in cluster_config["containers"]
-    ):
-        resolved_container = cluster_config["containers"][container]
+    containers = cluster_config.get("containers")
+    if containers and container in containers:
+        resolved_container = containers[container]
         model["container"] = resolved_container
-        logging.debug(f"Resolved container alias '{container}' -> '{resolved_container}'")
+        logger.debug(f"Resolved container alias '{container}' -> '{resolved_container}'")
 
     return config
 
 
-def get_srtslurm_setting(key: str, default=None):
+def get_srtslurm_setting(key: str, default: Any = None) -> Any:
     """
     Get a setting from srtslurm.yaml cluster config.
 
@@ -118,32 +140,42 @@ def get_srtslurm_setting(key: str, default=None):
     return default
 
 
-def load_config(path: Path) -> dict:
+def load_config(path: Path | str) -> SrtConfig:
     """
     Load and validate YAML config, applying cluster defaults.
 
-    Returns fully resolved config ready for submission.
-    """
-    from .schema import JobConfig
+    Returns a fully typed, frozen SrtConfig dataclass ready for use.
 
+    Args:
+        path: Path to the YAML configuration file
+
+    Returns:
+        SrtConfig frozen dataclass
+
+    Raises:
+        FileNotFoundError: If config file doesn't exist
+        ValueError: If config validation fails
+    """
+    path = Path(path)
     if not path.exists():
         raise FileNotFoundError(f"Config file not found: {path}")
 
-    # Load user config
+    # Load raw user config
     with open(path) as f:
         user_config = yaml.safe_load(f)
 
     # Load cluster defaults (optional)
     cluster_config = load_cluster_config()
 
-    # Resolve with defaults
-    config = resolve_config_with_defaults(user_config, cluster_config)
+    # Resolve with defaults (applies aliases and default values)
+    resolved_config = resolve_config_with_defaults(user_config, cluster_config)
 
-    # Validate with pydantic
+    # Parse with marshmallow schema to get typed SrtConfig
     try:
-        validated = JobConfig(**config)
-        logging.info(f"Loaded config: {validated.name}")
-        # Return as dict with enums converted to strings (mode="json" serializes enums to their values)
-        return validated.model_dump(mode="json", by_alias=False, exclude_none=False)
+        schema = SrtConfig.Schema()
+        config = schema.load(resolved_config)
+        assert isinstance(config, SrtConfig)
+        logger.info(f"Loaded config: {config.name}")
+        return config
     except Exception as e:
         raise ValueError(f"Invalid config in {path}: {e}") from e

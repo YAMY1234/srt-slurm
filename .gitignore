@@ -1,3 +1,4 @@
+ignition/
 # Logs directory - ignore all benchmark runs
 logs/*/
 logs*/*/
@@ -50,3 +51,5 @@ configs/*.tar.gz
 
 .ruff_cache/
 *.egg-info/
+
+.coverage

@@ -1,88 +1,81 @@
-#!/usr/bin/env python3
 # SPDX-FileCopyrightText: Copyright (c) 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Base backend interface for inference frameworks.
-
-Defines a protocol for framework-specific implementations.
+Base types and protocols for backend configurations.
 """
 
-from abc import ABC, abstractmethod
-from pathlib import Path
+from collections.abc import Sequence
+from enum import Enum
+from typing import TYPE_CHECKING, Any, Optional, Protocol
+
+if TYPE_CHECKING:
+    from pathlib import Path
+
+    from srtctl.core.runtime import RuntimeContext
+    from srtctl.core.topology import Endpoint, Process
 
 
-class Backend(ABC):
-    """Base class for inference backend implementations.
+class BackendType(str, Enum):
+    """Supported backend types."""
 
+    SGLANG = "sglang"
+
+
+class BackendProtocol(Protocol):
+    """Protocol that all backend configurations must implement.
+
+    This allows frozen dataclasses to act as backends by implementing these methods.
     Each backend is responsible for:
-    1. Generating backend-specific config files
-    2. Rendering commands with proper flags and environment variables
-    3. Generating SLURM job scripts from Jinja templates
+    1. Allocating logical endpoints (serving units)
+    2. Converting endpoints to physical processes
+    3. Building commands to start those processes
     """
 
-    def __init__(self, config: dict):
-        """Initialize backend with user config.
+    @property
+    def type(self) -> str:
+        """Backend type identifier."""
+        ...
 
-        Args:
-            config: Full user configuration dict
-        """
-        self.config = config
-        self.backend_config = config.get("backend", {})
-        self.resources = config.get("resources", {})
-        self.model = config.get("model", {})
-        self.slurm = config.get("slurm", {})
+    def get_config_for_mode(self, mode: str) -> dict[str, Any]:
+        """Get config dict for a worker mode (prefill/decode/agg)."""
+        ...
 
-    @abstractmethod
-    def generate_config_file(self, params: dict = None) -> Path | None:
-        """Generate backend-specific config file.
+    def get_environment_for_mode(self, mode: str) -> dict[str, str]:
+        """Get environment variables for a worker mode."""
+        ...
 
-        Args:
-            params: Optional sweep parameters for template expansion
+    def allocate_endpoints(
+        self,
+        num_prefill: int,
+        num_decode: int,
+        num_agg: int,
+        gpus_per_prefill: int,
+        gpus_per_decode: int,
+        gpus_per_agg: int,
+        gpus_per_node: int,
+        available_nodes: Sequence[str],
+    ) -> list["Endpoint"]:
+        """Allocate logical endpoints based on resource requirements."""
+        ...
 
-        Returns:
-            Path to generated config file, or None if not applicable
-        """
-        pass
+    def endpoints_to_processes(
+        self,
+        endpoints: list["Endpoint"],
+        base_sys_port: int = 8081,
+    ) -> list["Process"]:
+        """Convert logical endpoints to physical processes."""
+        ...
 
-    @abstractmethod
-    def render_command(self, mode: str, config_path: Path = None) -> str:
-        """Render full command that would be executed.
-
-        Args:
-            mode: Worker mode (e.g., "prefill", "decode", "aggregated")
-            config_path: Path to generated config file (if applicable)
-
-        Returns:
-            Multi-line bash command string with env vars and flags
-        """
-        pass
-
-    @abstractmethod
-    def generate_slurm_script(self, config_path: Path = None, timestamp: str = None) -> tuple[Path, str]:
-        """Generate SLURM job script from Jinja template.
-
-        Args:
-            config_path: Path to backend-specific config file (if applicable)
-            timestamp: Timestamp for job submission (used in log directory naming)
-
-        Returns:
-            Tuple of (script_path, rendered_script_content)
-        """
-        pass
-
-    def get_environment_vars(self, mode: str) -> dict[str, str]:
-        """Get environment variables for this mode.
-
-        Args:
-            mode: Worker mode
-
-        Returns:
-            Dict of environment variable key-value pairs
-        """
-        env_key = f"{mode}_environment"
-        return self.backend_config.get(env_key, {})
-
-    def is_disaggregated(self) -> bool:
-        """Check if running in disaggregated mode (has prefill/decode nodes)."""
-        return self.resources.get("prefill_nodes") is not None
+    def build_worker_command(
+        self,
+        process: "Process",
+        endpoint_processes: list["Process"],
+        runtime: "RuntimeContext",
+        frontend_type: str = "dynamo",
+        profiling_enabled: bool = False,
+        nsys_prefix: list[str] | None = None,
+        dump_config_path: Optional["Path"] = None,
+    ) -> list[str]:
+        """Build command to start a worker process."""
+        ...

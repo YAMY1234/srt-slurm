@@ -1,5 +1,20 @@
 # Monitoring
 
+## Table of Contents
+
+- [Checking Job Status](#checking-job-status)
+- [Log Directory](#log-directory)
+- [Log Structure](#log-structure)
+- [Key Files](#key-files)
+  - [log.out](#logout)
+  - [benchmark.out](#benchmarkout)
+  - [Worker Logs](#worker-logs-node_prefill_w0err-node_decode_w0err)
+  - [config.yaml](#configyaml)
+- [Common Commands](#common-commands)
+- [Connecting to Running Jobs](#connecting-to-running-jobs)
+
+---
+
 ## Checking Job Status
 
 ```bash

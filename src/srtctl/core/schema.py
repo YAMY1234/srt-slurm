@@ -3,13 +3,46 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Pydantic schema definitions for job configuration validation.
+Frozen dataclass schema definitions for job configuration.
+
+Uses marshmallow_dataclass for type-safe configuration with validation.
+All config classes are frozen (immutable) after creation.
+
+Backend configs are defined in srtctl.backends.configs/ for modularity.
 """
 
+import builtins
+import itertools
+import logging
+from collections.abc import Iterator, Mapping
+from dataclasses import field
 from enum import Enum
-import re
-from typing import Any, Dict, Literal, Optional
-from pydantic import BaseModel, Field, field_validator
+from pathlib import Path
+from typing import (
+    TYPE_CHECKING,
+    Annotated,
+    Any,
+    ClassVar,
+    Literal,
+)
+
+import yaml
+from marshmallow import Schema, ValidationError, fields
+from marshmallow_dataclass import dataclass
+
+from srtctl.backends import (
+    BackendConfig,
+    SGLangProtocol,
+)
+from srtctl.core.formatting import (
+    FormattablePath,
+    FormattablePathField,
+)
+
+if TYPE_CHECKING:
+    pass
+
+logger = logging.getLogger(__name__)
 
 
 # ============================================================================
@@ -17,75 +50,37 @@ from pydantic import BaseModel, Field, field_validator
 # ============================================================================
 
 
-class ClusterConfig(BaseModel):
-    """Cluster configuration from srtslurm.yaml.
+@dataclass
+class ClusterConfig:
+    """Cluster configuration from srtslurm.yaml."""
 
-    Optional configuration file that provides cluster-specific defaults
-    and aliases for model paths and containers.
-    """
+    default_account: str | None = None
+    default_partition: str | None = None
+    default_time_limit: str | None = None
+    gpus_per_node: int | None = None
+    network_interface: str | None = None
+    use_gpus_per_node_directive: bool = True
+    use_segment_sbatch_directive: bool = True
+    srtctl_root: str | None = None
+    model_paths: dict[str, str] | None = None
+    containers: dict[str, str] | None = None
+    cloud: dict[str, str] | None = None
 
-    model_config = {"extra": "allow"}  # Allow additional fields
-
-    # Default SLURM settings
-    default_account: Optional[str] = Field(None, description="Default SLURM account")
-    default_partition: Optional[str] = Field(None, description="Default SLURM partition")
-    default_time_limit: Optional[str] = Field(None, description="Default job time limit")
-
-    # Resource defaults
-    gpus_per_node: Optional[int] = Field(None, description="Default GPUs per node")
-    network_interface: Optional[str] = Field(None, description="Network interface (e.g., enP6p9s0np0)")
-
-    # SLURM directive compatibility
-    use_gpus_per_node_directive: Optional[bool] = Field(
-        True, description="Include #SBATCH --gpus-per-node directive (set False for incompatible clusters)"
-    )
-    use_segment_sbatch_directive: Optional[bool] = Field(
-        True, description="Include #SBATCH --segment directive for segment-based scheduling"
-    )
-
-    # Path settings
-    srtctl_root: Optional[str] = Field(
-        None,
-        description="Path to srtctl repo root (where scripts/templates/ lives)",
-    )
-
-    # Model path aliases (optional convenience)
-    model_paths: Optional[Dict[str, str]] = Field(
-        None,
-        description="Mapping of short names to full model paths",
-        examples=[{"deepseek-r1": "/models/deepseek-r1"}],
-    )
-
-    # Container aliases (optional convenience)
-    containers: Optional[Dict[str, str]] = Field(
-        None,
-        description="Mapping of short names to container paths",
-        examples=[{"latest": "/containers/sglang-latest.sqsh"}],
-    )
-
-    # Cloud sync settings (optional)
-    cloud: Optional[Dict[str, str]] = Field(
-        None,
-        description="S3-compatible cloud storage settings for result syncing",
-    )
+    Schema: ClassVar[type[Schema]] = Schema
 
 
 # ============================================================================
-# Job Configuration
+# Enums
 # ============================================================================
 
 
 class GpuType(str, Enum):
-    """Supported GPU types."""
-
     GB200 = "gb200"
     GB300 = "gb300"
     H100 = "h100"
 
 
 class Precision(str, Enum):
-    """Model precision/quantization formats."""
-
     FP4 = "fp4"
     FP8 = "fp8"
     FP16 = "fp16"
@@ -93,422 +88,638 @@ class Precision(str, Enum):
 
 
 class BenchmarkType(str, Enum):
-    """Benchmark types."""
-
     MANUAL = "manual"
     SA_BENCH = "sa-bench"
+    ROUTER = "router"
+    MOONCAKE_ROUTER = "mooncake-router"
     MMLU = "mmlu"
     GPQA = "gpqa"
     LONGBENCHV2 = "longbenchv2"
 
 
-class ModelConfig(BaseModel):
-    """Model configuration."""
-
-    model_config = {"use_enum_values": True}
-
-    path: str = Field(..., description="Path or alias to model directory")
-    container: str = Field(..., description="Path or alias to container image")
-    precision: Precision = Field(..., description="Model precision (fp4, fp8, fp16, bf16)")
-
-
-class ResourceConfig(BaseModel):
-    """Resource allocation configuration."""
-
-    model_config = {"use_enum_values": True}
-
-    gpu_type: GpuType = Field(..., description="GPU type (gb200, gb300, h100)")
-    gpus_per_node: int = Field(4, description="Number of GPUs per node")
-
-    # Disaggregated mode
-    prefill_nodes: Optional[int] = Field(None, description="Number of prefill nodes")
-    decode_nodes: Optional[int] = Field(None, description="Number of decode nodes")
-    prefill_workers: Optional[int] = Field(None, description="Number of prefill workers")
-    decode_workers: Optional[int] = Field(None, description="Number of decode workers")
-
-    # Aggregated mode
-    agg_nodes: Optional[int] = Field(None, description="Number of aggregated nodes")
-    agg_workers: Optional[int] = Field(None, description="Number of aggregated workers")
-
-    @field_validator("prefill_nodes", "decode_nodes", "agg_nodes")
-    @classmethod
-    def validate_mode(cls, v, info):
-        """Validate that either disagg or agg mode is specified."""
-        data = info.data
-        has_disagg = any(k in data for k in ["prefill_nodes", "decode_nodes"])
-        has_agg = "agg_nodes" in data
-
-        if has_disagg and has_agg:
-            raise ValueError("Cannot specify both disaggregated and aggregated mode")
-
-        return v
-
-
-class SlurmConfig(BaseModel):
-    """SLURM job settings."""
-
-    account: Optional[str] = Field(None, description="SLURM account")
-    partition: Optional[str] = Field(None, description="SLURM partition")
-    time_limit: Optional[str] = Field(None, description="Job time limit (HH:MM:SS)")
-
-
-class BenchmarkConfig(BaseModel):
-    """Benchmark configuration."""
-
-    type: BenchmarkType = Field(BenchmarkType.MANUAL, description="Benchmark type")
-
-    # SA-bench specific
-    isl: Optional[int] = Field(None, description="Input sequence length")
-    osl: Optional[int] = Field(None, description="Output sequence length")
-    concurrencies: Optional[list[int] | str] = Field(
-        None, description="Concurrency levels to test (list of ints or x-delimited string like '1x4x8')"
-    )
-    req_rate: Optional[str] = Field("inf", description="Request rate")
-
-    # LongBench-v2 specific
-    num_examples: Optional[int] = Field(None, description="Number of examples to evaluate (default: all)")
-    max_tokens: Optional[int] = Field(None, description="Max output tokens (default: 16384)")
-    max_context_length: Optional[int] = Field(None, description="Max context length (default: 128000, use 65536 for 64k)")
-    num_threads: Optional[int] = Field(None, description="Number of evaluation threads (default: 16)")
-    categories: Optional[str] = Field(None, description="Categories to evaluate (default: all)")
-    repeat: Optional[int] = Field(None, description="Number of times to repeat evaluation (default: 1)")
-
-
 class ProfilingType(str, Enum):
-    """Supported profiling types."""
-
     NSYS = "nsys"
     TORCH = "torch"
     NONE = "none"
 
 
-class ProfilingConfig(BaseModel):
-    """Profiling configuration."""
-
-    type: ProfilingType = Field(ProfilingType.NONE, description="Profiling type")
-    # Unified profiling spec (used for both prefill and decode in PD
-    # disaggregation mode, or for aggregated mode).
-    isl: Optional[int] = Field(None, description="Input sequence length")
-    osl: Optional[int] = Field(None, description="Output sequence length")
-    concurrency: Optional[int] = Field(None, description="Batch size / concurrency")
-    start_step: Optional[int] = Field(None, description="Profiling start step")
-    stop_step: Optional[int] = Field(None, description="Profiling stop step")
+# ============================================================================
+# Marshmallow Custom Fields
+# ============================================================================
 
 
-class SGLangPrefillConfig(BaseModel):
-    """SGLang prefill worker configuration.
+class BackendConfigField(fields.Field):
+    """Marshmallow field for polymorphic backend deserialization based on type."""
 
-    Accepts any SGLang flags - no required fields.
-    """
+    def _deserialize(
+        self,
+        value: Any,
+        attr: str | None,
+        data: Mapping[str, Any] | None,
+        **kwargs,
+    ) -> BackendConfig:
+        """Deserialize backend config based on 'type' field."""
+        if value is None:
+            # Default to SGLang
+            return SGLangProtocol()
 
-    model_config = {"extra": "allow"}
+        if isinstance(value, (SGLangProtocol)):
+            return value
 
+        if not isinstance(value, dict):
+            raise ValidationError(f"Expected dict for backend config, got {type(value).__name__}")
 
-class SGLangDecodeConfig(BaseModel):
-    """SGLang decode worker configuration.
+        # Get backend type from the value dict
+        backend_type = value.get("type", "sglang")
 
-    Accepts any SGLang flags - no required fields.
-    """
+        if backend_type == "sglang":
+            schema = SGLangProtocol.Schema()
+            return schema.load(value)
+        else:
+            raise ValidationError(f"Unknown backend type: {backend_type!r}. Supported types: sglang")
 
-    model_config = {"extra": "allow"}
-
-
-class SGLangAggregatedConfig(BaseModel):
-    """SGLang aggregated worker configuration.
-
-    Accepts any SGLang flags - no required fields.
-    """
-
-    model_config = {"extra": "allow"}
-
-
-class SGLangConfig(BaseModel):
-    """SGLang backend configuration."""
-
-    prefill: Optional[SGLangPrefillConfig] = None
-    decode: Optional[SGLangDecodeConfig] = None
-    aggregated: Optional[SGLangAggregatedConfig] = None
-
-
-class BackendConfig(BaseModel):
-    """Backend configuration (auto-populated, not user-facing)."""
-
-    type: Literal["sglang"] = "sglang"  # Only SGLang supported for now
-
-    # Auto-populated from resources.gpu_type + model.precision
-    gpu_type: Optional[str] = None
-
-    # Environment variables
-    prefill_environment: Optional[dict[str, str]] = None
-    decode_environment: Optional[dict[str, str]] = None
-    aggregated_environment: Optional[dict[str, str]] = None
-
-    # SGLang-specific config
-    sglang_config: Optional[SGLangConfig] = None
-
-    # Frontend / router settings
-    enable_multiple_frontends: bool = True
-    num_additional_frontends: int = 9
-    # Whether to launch sglang_router alongside the workers (PD disaggregation).
-    # This is user-configurable via backend.use_sglang_router in the recipe.
-    use_sglang_router: bool = False
+    def _serialize(self, value: Any | None, attr: str | None, obj: Any, **kwargs) -> Any:
+        """Serialize backend config to dict."""
+        if value is None:
+            return None
+        if isinstance(value, SGLangProtocol):
+            return SGLangProtocol.Schema().dump(value)
+        return value
 
 
-class JobConfig(BaseModel):
-    """Complete job configuration."""
+class SweepConfigField(fields.Field):
+    """Marshmallow field for SweepConfig."""
 
-    model_config = {"use_enum_values": True}
+    def _deserialize(self, value: Any, attr: str | None, data: Mapping[str, Any] | None, **kwargs) -> Any:
+        if value is None:
+            return None
+        if isinstance(value, SweepConfig):
+            return value
+        if not isinstance(value, dict):
+            raise ValidationError(f"Expected dict for sweep config, got {type(value).__name__}")
 
-    name: str = Field(..., description="Job name")
-    model: ModelConfig
-    resources: ResourceConfig
-    slurm: SlurmConfig = Field(default_factory=SlurmConfig)
-    backend: Optional[BackendConfig] = None  # Auto-populated
-    benchmark: BenchmarkConfig = Field(default_factory=BenchmarkConfig)
-    profiling: ProfilingConfig = Field(default_factory=ProfilingConfig)
+        mode = value.get("mode", "zip")
+        parameters: dict[str, list[Any]] = {}
 
-    # Additional optional settings
-    enable_config_dump: bool = True
-    extra_mount: Optional[list[str]] = Field(
-        default=None,
-        description="Additional host-to-container mounts in 'host:container' format.",
-    )
+        if "parameters" in value:
+            for key, val in value["parameters"].items():
+                if not isinstance(val, list):
+                    raise ValidationError(f"Sweep parameter '{key}' must be a list")
+                parameters[key] = val
+        else:
+            for key, val in value.items():
+                if key == "mode":
+                    continue
+                if not isinstance(val, list):
+                    raise ValidationError(f"Sweep parameter '{key}' must be a list")
+                parameters[key] = val
 
-    @field_validator("extra_mount")
-    @classmethod
-    def validate_extra_mount(cls, v):
-        if v is None:
-            return v
-        if not isinstance(v, list):
-            raise ValueError("extra_mount must be a list of 'host:container' strings")
-        pattern = re.compile(r"^[^:]+:[^:]+$")
-        for item in v:
-            if not isinstance(item, str):
-                raise ValueError("extra_mount entries must be strings")
-            if not pattern.match(item):
-                raise ValueError("extra_mount entries must be in 'host:container' format")
-        return v
+        return SweepConfig(mode=mode, parameters=parameters)
 
-    def model_post_init(self, __context: Any) -> None:
-        """Auto-populate backend config if not provided."""
-        if self.backend is None:
-            self.backend = BackendConfig()
+    def _serialize(self, value: Any | None, attr: str | None, obj: Any, **kwargs) -> Any:
+        if value is None:
+            return None
+        if isinstance(value, SweepConfig):
+            result: dict[str, Any] = {"mode": value.mode}
+            result.update(value.parameters)
+            return result
+        return value
 
-        # Auto-populate gpu_type from resources (values are already strings due to use_enum_values)
-        if self.backend.gpu_type is None:
-            self.backend.gpu_type = f"{self.resources.gpu_type}-{self.model.precision}"
 
-        # Validate profiling mode constraints
-        self._validate_profiling_mode()
+# ============================================================================
+# Sub-Configuration Dataclasses (all frozen)
+# ============================================================================
 
-        # Validate resource allocation
-        self._validate_resources()
 
-    def _validate_profiling_mode(self) -> None:
-        """Validate profiling mode constraints."""
-        prof = getattr(self, "profiling", None)
-        if not prof or prof.type in (ProfilingType.NONE, None):
+@dataclass(frozen=True)
+class SweepConfig:
+    """Configuration for benchmark parameter sweeps."""
+
+    mode: Literal["zip", "grid"] = "zip"
+    parameters: dict[str, list[Any]] = field(default_factory=dict)
+
+    def get_combinations(self) -> Iterator[dict[str, Any]]:
+        if not self.parameters:
+            yield {}
             return
 
-        # Auto-disable config dump when profiling (already handled in backend, but validate here too)
-        if self.enable_config_dump:
-            # This is fine - backend will handle disabling it
-            pass
-
-        # Profiling mode is mutually exclusive with benchmarking
-        if self.benchmark and self.benchmark.type != BenchmarkType.MANUAL:
-            raise ValueError(
-                f"Cannot enable profiling with benchmark type '{self.benchmark.type}'. "
-                "Profiling mode is mutually exclusive with benchmarking."
-            )
-
-        # Profiling mode requires single worker only
-        is_disaggregated = self.resources.prefill_nodes is not None
-
-        if is_disaggregated:
-            if self.resources.prefill_workers and self.resources.prefill_workers > 1:
-                raise ValueError(
-                    f"Profiling mode requires single worker only. "
-                    f"Got prefill_workers={self.resources.prefill_workers}"
-                )
-            if self.resources.decode_workers and self.resources.decode_workers > 1:
-                raise ValueError(
-                    f"Profiling mode requires single worker only. "
-                    f"Got decode_workers={self.resources.decode_workers}"
-                )
+        if self.mode == "zip":
+            param_names = list(self.parameters.keys())
+            param_lists = [self.parameters[name] for name in param_names]
+            for values in zip(*param_lists, strict=False):
+                yield dict(zip(param_names, values, strict=False))
         else:
-            # Aggregated mode
-            if self.resources.agg_workers and self.resources.agg_workers > 1:
-                raise ValueError(
-                    f"Profiling mode requires single worker only. " f"Got agg_workers={self.resources.agg_workers}"
-                )
+            param_names = list(self.parameters.keys())
+            param_lists = [self.parameters[name] for name in param_names]
+            for values in itertools.product(*param_lists):
+                yield dict(zip(param_names, values, strict=False))
 
-    def _validate_resources(self) -> None:
-        """Validate resource allocation and TP size constraints."""
-        if not self.backend or not self.backend.sglang_config:
-            return
+    def __len__(self) -> int:
+        if not self.parameters:
+            return 1
+        if self.mode == "zip":
+            return len(next(iter(self.parameters.values())))
+        result = 1
+        for param_list in self.parameters.values():
+            result *= len(param_list)
+        return result
 
-        is_disaggregated = self.resources.prefill_nodes is not None
-        gpus_per_node = self.resources.gpus_per_node
+    Schema: ClassVar[type[Schema]] = Schema
 
-        # Validate that sglang_config sections match resource allocation mode
-        sglang_cfg = self.backend.sglang_config
-        has_prefill_cfg = sglang_cfg.prefill is not None
-        has_decode_cfg = sglang_cfg.decode is not None
-        has_agg_cfg = hasattr(sglang_cfg, "aggregated") and sglang_cfg.aggregated is not None
 
-        if is_disaggregated:
-            # Disaggregated resources but no prefill/decode config
-            if not has_prefill_cfg and not has_decode_cfg:
-                raise ValueError(
-                    "Disaggregated mode (prefill_nodes/decode_nodes) requires "
-                    "prefill and decode sections in sglang_config. "
-                    f"Found: prefill={has_prefill_cfg}, decode={has_decode_cfg}"
-                )
-            # Has aggregated config but using disaggregated resources
-            if has_agg_cfg:
-                raise ValueError(
-                    "Cannot use aggregated sglang_config section with disaggregated resources. "
-                    "Use prefill and decode sections instead, or switch to agg_nodes/agg_workers."
-                )
-        else:
-            # Aggregated resources but has decode config
-            if has_decode_cfg:
-                raise ValueError(
-                    "Cannot use decode sglang_config section with aggregated resources "
-                    "(agg_nodes/agg_workers). Use disaggregated resources "
-                    "(prefill_nodes/decode_nodes) or use aggregated section in sglang_config."
-                )
+@dataclass(frozen=True)
+class ModelConfig:
+    """Model configuration."""
 
-        # Validate disaggregated mode
-        if is_disaggregated:
-            # Validate prefill resources
-            if self.backend.sglang_config.prefill:
-                prefill_config = self.backend.sglang_config.prefill
-                self._validate_worker_resources(
-                    mode="prefill",
-                    config=prefill_config,
-                    nodes=self.resources.prefill_nodes,
-                    workers=self.resources.prefill_workers,
-                    gpus_per_node=gpus_per_node,
-                )
+    path: str
+    container: str
+    precision: str
 
-            # Validate decode resources
-            if self.backend.sglang_config.decode:
-                decode_config = self.backend.sglang_config.decode
-                self._validate_worker_resources(
-                    mode="decode",
-                    config=decode_config,
-                    nodes=self.resources.decode_nodes,
-                    workers=self.resources.decode_workers,
-                    gpus_per_node=gpus_per_node,
-                )
-        else:
-            # Validate aggregated mode
-            if hasattr(self.backend.sglang_config, "aggregated") and self.backend.sglang_config.aggregated:
-                agg_config = self.backend.sglang_config.aggregated
-                self._validate_worker_resources(
-                    mode="aggregated",
-                    config=agg_config,
-                    nodes=self.resources.agg_nodes,
-                    workers=self.resources.agg_workers,
-                    gpus_per_node=gpus_per_node,
-                )
-            # Aggregated can also use "prefill" section
-            elif self.backend.sglang_config.prefill:
-                prefill_config = self.backend.sglang_config.prefill
-                self._validate_worker_resources(
-                    mode="aggregated",
-                    config=prefill_config,
-                    nodes=self.resources.agg_nodes,
-                    workers=self.resources.agg_workers,
-                    gpus_per_node=gpus_per_node,
-                )
+    Schema: ClassVar[type[Schema]] = Schema
 
-    def _validate_worker_resources(self, mode: str, config: Any, nodes: int, workers: int, gpus_per_node: int) -> None:
-        """Validate that worker configuration fits available resources.
+
+@dataclass(frozen=True)
+class ResourceConfig:
+    """Resource allocation configuration."""
+
+    gpu_type: str
+    gpus_per_node: int = 4
+
+    # Disaggregated mode
+    prefill_nodes: int | None = None
+    decode_nodes: int | None = None
+    prefill_workers: int | None = None
+    decode_workers: int | None = None
+
+    # Aggregated mode
+    agg_nodes: int | None = None
+    agg_workers: int | None = None
+
+    @property
+    def is_disaggregated(self) -> bool:
+        return self.prefill_nodes is not None or self.decode_nodes is not None
+
+    @property
+    def total_nodes(self) -> int:
+        if self.is_disaggregated:
+            return (self.prefill_nodes or 0) + (self.decode_nodes or 0)
+        return self.agg_nodes or 1
+
+    @property
+    def num_prefill(self) -> int:
+        return self.prefill_workers or 0
+
+    @property
+    def num_decode(self) -> int:
+        return self.decode_workers or 0
+
+    @property
+    def num_agg(self) -> int:
+        return self.agg_workers or 0
+
+    @property
+    def gpus_per_prefill(self) -> int:
+        if self.prefill_nodes and self.prefill_workers:
+            return (self.prefill_nodes * self.gpus_per_node) // self.prefill_workers
+        return self.gpus_per_node
+
+    @property
+    def gpus_per_decode(self) -> int:
+        if self.decode_nodes and self.decode_workers:
+            return (self.decode_nodes * self.gpus_per_node) // self.decode_workers
+        # decode_nodes=0 with decode_workers means "share nodes with prefill"
+        # Inherit TP from prefill in this case
+        if self.decode_nodes == 0 and self.decode_workers:
+            return self.gpus_per_prefill
+        return self.gpus_per_node
+
+    @property
+    def gpus_per_agg(self) -> int:
+        if self.agg_nodes and self.agg_workers:
+            return (self.agg_nodes * self.gpus_per_node) // self.agg_workers
+        return self.gpus_per_node
+
+    @property
+    def prefill_gpus(self) -> int:
+        """Total GPUs used by all prefill workers."""
+        return (self.prefill_nodes or 0) * self.gpus_per_node
+
+    @property
+    def decode_gpus(self) -> int:
+        """Total GPUs used by all decode workers."""
+        return (self.decode_nodes or 0) * self.gpus_per_node
+
+    Schema: ClassVar[type[Schema]] = Schema
+
+
+@dataclass(frozen=True)
+class SlurmConfig:
+    """SLURM job settings."""
+
+    account: str | None = None
+    partition: str | None = None
+    time_limit: str | None = None
+
+    Schema: ClassVar[type[Schema]] = Schema
+
+
+@dataclass(frozen=True)
+class BenchmarkConfig:
+    """Benchmark configuration."""
+
+    type: str = "manual"
+    isl: int | None = None
+    osl: int | None = None
+    concurrencies: list[int] | str | None = None
+    req_rate: str | int | None = "inf"
+    sweep: Annotated[SweepConfig, SweepConfigField()] | None = None
+    # Accuracy benchmark fields
+    num_examples: int | None = None
+    max_tokens: int | None = None
+    repeat: int | None = None
+    num_threads: int | None = None
+    max_context_length: int | None = None
+    categories: list[str] | None = None
+    # Router benchmark fields
+    num_requests: int | None = None
+    concurrency: int | None = None
+    prefix_ratios: list[float] | str | None = None
+    # Mooncake router benchmark fields (uses aiperf with mooncake_trace)
+    mooncake_workload: str | None = None  # "mooncake", "conversation", "synthetic", "toolagent"
+    ttft_threshold_ms: int | None = None  # Goodput TTFT threshold in ms (default: 2000)
+    itl_threshold_ms: int | None = None  # Goodput ITL threshold in ms (default: 25)
+
+    def get_concurrency_list(self) -> list[int]:
+        if self.concurrencies is None:
+            return []
+        if isinstance(self.concurrencies, str):
+            return [int(x) for x in self.concurrencies.split("x")]
+        return list(self.concurrencies)
+
+    Schema: ClassVar[builtins.type[Schema]] = Schema
+
+
+@dataclass(frozen=True)
+class ProfilingPhaseConfig:
+    """Profiling config for a single phase (prefill/decode/aggregated)."""
+
+    start_step: int | None = None  # Step to start profiling
+    stop_step: int | None = None  # Step to stop profiling
+
+    Schema: ClassVar[builtins.type[Schema]] = Schema
+
+
+@dataclass(frozen=True)
+class ProfilingConfig:
+    """Profiling configuration.
+
+    Supports two profiling modes:
+    - nsys: NVIDIA Nsight Systems profiling (wraps command with nsys profile)
+    - torch: PyTorch profiler (uses SGLANG_TORCH_PROFILER_DIR)
+
+    When profiling is enabled, workers use sglang.launch_server instead of dynamo.sglang.
+
+    Traffic generator parameters (isl, osl, concurrency) are specified at the top level
+    and used for all phases. Per-phase start_step/stop_step are specified in the
+    prefill/decode/aggregated sections.
+    """
+
+    type: str = "none"  # "none", "nsys", or "torch"
+    isl: int | None = None  # Input sequence length for profiling workload
+    osl: int | None = None  # Output sequence length for profiling workload
+    concurrency: int | None = None  # Batch size / concurrency
+
+    # Phase-specific profiling step configs
+    prefill: ProfilingPhaseConfig | None = None
+    decode: ProfilingPhaseConfig | None = None
+    aggregated: ProfilingPhaseConfig | None = None
+
+    @property
+    def enabled(self) -> bool:
+        """Check if profiling is enabled."""
+        return self.type != "none"
+
+    @property
+    def is_nsys(self) -> bool:
+        """Check if using NVIDIA Nsight Systems profiling."""
+        return self.type == "nsys"
+
+    @property
+    def is_torch(self) -> bool:
+        """Check if using PyTorch profiler."""
+        return self.type == "torch"
+
+    def _get_phase_config(self, mode: str) -> ProfilingPhaseConfig | None:
+        """Get the phase config for the given mode."""
+        if mode == "prefill":
+            return self.prefill
+        elif mode == "decode":
+            return self.decode
+        elif mode in ("agg", "aggregated"):
+            return self.aggregated
+        return None
+
+    def get_env_vars(self, mode: str, profile_dir: str) -> dict[str, str]:
+        """Get profiling-specific environment variables.
 
         Args:
-            mode: Worker mode (prefill, decode, aggregated)
-            config: SGLang config dict for this mode
-            nodes: Number of nodes allocated
-            workers: Number of workers
-            gpus_per_node: GPUs per node
+            mode: Worker mode (prefill/decode/agg)
+            profile_dir: Base directory for profiling output
 
-        Raises:
-            ValueError: If resource constraints are violated
+        Returns:
+            Dictionary of environment variables
         """
-        if not config or not nodes or not workers:
+        if not self.enabled:
+            return {}
+
+        env = {
+            "PROFILING_MODE": mode,
+        }
+
+        # Traffic generator params (same for all phases)
+        if self.isl is not None:
+            env["PROFILE_ISL"] = str(self.isl)
+        if self.osl is not None:
+            env["PROFILE_OSL"] = str(self.osl)
+        if self.concurrency is not None:
+            env["PROFILE_CONCURRENCY"] = str(self.concurrency)
+
+        # Phase-specific start/stop steps
+        phase_config = self._get_phase_config(mode)
+        if phase_config:
+            phase_key = mode.upper() if mode != "agg" else "AGG"
+            if phase_config.start_step is not None:
+                env[f"PROFILE_{phase_key}_START_STEP"] = str(phase_config.start_step)
+            if phase_config.stop_step is not None:
+                env[f"PROFILE_{phase_key}_STOP_STEP"] = str(phase_config.stop_step)
+
+        if self.is_torch:
+            env["SGLANG_TORCH_PROFILER_DIR"] = f"{profile_dir}/{mode}"
+
+        return env
+
+    def get_nsys_prefix(self, output_file: str) -> list[str]:
+        """Get nsys profiling command prefix.
+
+        Args:
+            output_file: Path for nsys output file (without extension)
+
+        Returns:
+            Command prefix list for nsys profiling
+        """
+        if not self.is_nsys:
+            return []
+
+        return [
+            "nsys",
+            "profile",
+            "-t",
+            "cuda,nvtx",
+            "--cuda-graph-trace=node",
+            "-c",
+            "cudaProfilerApi",
+            "--capture-range-end",
+            "stop",
+            "--force-overwrite",
+            "true",
+            "-o",
+            output_file,
+        ]
+
+    Schema: ClassVar[builtins.type[Schema]] = Schema
+
+
+@dataclass
+class DynamoConfig:
+    """Dynamo installation configuration.
+
+    Only one of version, hash, or top_of_tree should be specified.
+    Defaults to version="0.7.0" (pip install).
+
+    Options:
+        version: Install specific version from PyPI (e.g., "0.7.0")
+        hash: Clone repo and checkout specific commit hash
+        top_of_tree: Clone repo at HEAD (latest)
+
+    If top_of_tree or hash is set, version is automatically cleared.
+    """
+
+    version: str | None = "0.7.0"
+    hash: str | None = None
+    top_of_tree: bool = False
+
+    def __post_init__(self) -> None:
+        # Auto-clear version if hash or top_of_tree is set
+        if self.hash is not None or self.top_of_tree:
+            object.__setattr__(self, "version", None)
+
+        # Validate only one source option is set
+        if self.hash is not None and self.top_of_tree:
+            raise ValueError("Cannot specify both hash and top_of_tree")
+
+    @property
+    def needs_source_install(self) -> bool:
+        """Whether this config requires a source install (git clone + maturin)."""
+        return self.hash is not None or self.top_of_tree
+
+    def get_install_commands(self) -> str:
+        """Get the bash commands to install dynamo."""
+        if self.version is not None:
+            return (
+                f"echo 'Installing dynamo {self.version}...' && "
+                f"pip install --quiet ai-dynamo-runtime=={self.version} ai-dynamo=={self.version} && "
+                f"echo 'Dynamo {self.version} installed'"
+            )
+
+        # Source install (hash or top-of-tree)
+        git_ref = self.hash if self.hash else "HEAD"
+        checkout_cmd = f"git checkout {self.hash}" if self.hash else ""
+
+        return (
+            f"echo 'Installing dynamo from source ({git_ref})...' && "
+            "cd /sgl-workspace/ && "
+            "git clone https://github.com/ai-dynamo/dynamo.git && "
+            "cd dynamo && "
+            f"{checkout_cmd + ' && ' if checkout_cmd else ''}"
+            "cd lib/bindings/python/ && "
+            "maturin build -o /tmp && "
+            "pip install /tmp/ai_dynamo_runtime*.whl && "
+            "cd /sgl-workspace/dynamo/ && "
+            "pip install -e . && "
+            "cd /sgl-workspace/sglang/ && "
+            f"echo 'Dynamo installed from source ({git_ref})'"
+        )
+
+    Schema: ClassVar[type[Schema]] = Schema
+
+
+@dataclass(frozen=True)
+class FrontendConfig:
+    """Frontend/router configuration.
+
+    Attributes:
+        type: Frontend type - "dynamo" (default) or "sglang"
+        enable_multiple_frontends: Scale with nginx + multiple routers
+        num_additional_frontends: Additional routers beyond master (default: 9)
+        args: CLI arguments passed to the frontend/router process
+        env: Environment variables for frontend processes
+    """
+
+    type: str = "dynamo"
+    enable_multiple_frontends: bool = True
+    num_additional_frontends: int = 9
+    args: dict[str, Any] | None = None
+    env: dict[str, str] | None = None
+
+    Schema: ClassVar[builtins.type[Schema]] = Schema
+
+
+@dataclass(frozen=True)
+class OutputConfig:
+    """Output configuration with formattable paths."""
+
+    log_dir: Annotated[FormattablePath, FormattablePathField()] = field(
+        default_factory=lambda: FormattablePath(template="./outputs/{job_id}/logs")
+    )
+
+    Schema: ClassVar[type[Schema]] = Schema
+
+
+@dataclass(frozen=True)
+class HealthCheckConfig:
+    """Health check configuration."""
+
+    max_attempts: int = 180  # 30 minutes default (large models take time to load)
+    interval_seconds: int = 10
+
+    Schema: ClassVar[type[Schema]] = Schema
+
+
+# ============================================================================
+# Main Configuration Dataclass
+# ============================================================================
+
+
+@dataclass(frozen=True)
+class SrtConfig:
+    """Complete srtctl job configuration (frozen, immutable).
+
+    This is the main configuration type returned by load_config().
+
+    The backend field supports polymorphic deserialization:
+    - type: sglang -> SGLangProtocol
+    """
+
+    name: str
+    model: ModelConfig
+    resources: ResourceConfig
+
+    slurm: SlurmConfig = field(default_factory=SlurmConfig)
+    backend: Annotated[BackendConfig, BackendConfigField()] = field(default_factory=SGLangProtocol)
+    frontend: FrontendConfig = field(default_factory=FrontendConfig)
+    dynamo: DynamoConfig = field(default_factory=DynamoConfig)
+    benchmark: BenchmarkConfig = field(default_factory=BenchmarkConfig)
+    profiling: ProfilingConfig = field(default_factory=ProfilingConfig)
+    output: OutputConfig = field(default_factory=OutputConfig)
+    health_check: HealthCheckConfig = field(default_factory=HealthCheckConfig)
+
+    environment: dict[str, str] = field(default_factory=dict)
+    container_mounts: dict[
+        Annotated[FormattablePath, FormattablePathField()],
+        Annotated[FormattablePath, FormattablePathField()],
+    ] = field(default_factory=dict)
+    extra_mount: tuple[str, ...] | None = None
+    srun_options: dict[str, str] = field(default_factory=dict)
+    sbatch_directives: dict[str, str] = field(default_factory=dict)
+    enable_config_dump: bool = True
+
+    # Custom setup script (runs before dynamo install and worker startup)
+    # e.g. "custom-setup.sh" -> runs /configs/custom-setup.sh
+    setup_script: str | None = None
+
+    Schema: ClassVar[type[Schema]] = Schema
+
+    def __post_init__(self):
+        """Validate configuration after initialization."""
+        self._validate_profiling()
+
+    def _validate_profiling(self):
+        """Validate profiling configuration matches serving mode."""
+        prof = self.profiling
+        if not prof.enabled:
             return
 
-        # Get TP size from config (we only care about tensor parallelism, not DP/EP)
-        tp_size = None
+        # Traffic generator params are required when profiling is enabled
+        if prof.isl is None or prof.osl is None or prof.concurrency is None:
+            raise ValidationError(
+                "profiling.isl/osl/concurrency must be set when profiling is enabled. "
+                f"Got isl={prof.isl}, osl={prof.osl}, concurrency={prof.concurrency}"
+            )
 
-        # Config can be a Pydantic model or dict - handle both
-        if hasattr(config, "model_dump"):
-            config_dict = config.model_dump()
-        elif hasattr(config, "__dict__"):
-            config_dict = config.__dict__
+        r = self.resources
+        is_disaggregated = r.is_disaggregated
+        has_prefill_prof = prof.prefill is not None
+        has_decode_prof = prof.decode is not None
+        has_agg_prof = prof.aggregated is not None
+
+        # Validate phase configs match serving mode
+        if is_disaggregated:
+            if has_agg_prof:
+                raise ValidationError(
+                    "Disaggregated mode only supports profiling.prefill/decode; profiling.aggregated is not allowed."
+                )
+            if not has_prefill_prof or not has_decode_prof:
+                raise ValidationError(
+                    "Disaggregated mode requires both profiling.prefill and profiling.decode "
+                    "to be set when profiling is enabled."
+                )
         else:
-            config_dict = config
+            if has_prefill_prof or has_decode_prof:
+                raise ValidationError(
+                    "Aggregated mode only supports profiling.aggregated; profiling.prefill/decode are not allowed."
+                )
+            if not has_agg_prof:
+                raise ValidationError(
+                    "Aggregated mode requires profiling.aggregated to be set when profiling is enabled."
+                )
 
-        if isinstance(config_dict, dict):
-            tp_size = (
-                config_dict.get("tensor-parallel-size")
-                or config_dict.get("tensor_parallel_size")
-                or config_dict.get("tp-size")
-                or config_dict.get("tp_size")
-            )
+        # Profiling requires single worker per role
+        if is_disaggregated:
+            if r.num_prefill != 1 or r.num_decode != 1:
+                raise ValidationError(
+                    f"Profiling mode requires exactly 1 prefill and 1 decode worker. "
+                    f"Got prefill_workers={r.num_prefill}, decode_workers={r.num_decode}"
+                )
+        else:
+            if r.num_agg != 1:
+                raise ValidationError(
+                    f"Profiling mode requires exactly 1 aggregated worker. Got agg_workers={r.num_agg}"
+                )
 
-        if not tp_size:
-            # No TP size specified, can't validate
-            return
+    @classmethod
+    def from_yaml(cls, yaml_path: Path) -> "SrtConfig":
+        with open(yaml_path) as f:
+            data = yaml.safe_load(f)
+        schema = cls.Schema()
+        return schema.load(data)
 
-        # Convert to int if it's a string (can happen during sweep template expansion)
-        try:
-            tp_size = int(tp_size)
-        except (ValueError, TypeError):
-            # Template placeholder like "{tp_size}" - skip validation
-            return
+    @property
+    def served_model_name(self) -> str:
+        """Get the served model name from backend config or model path."""
+        # Try SGLang-specific extraction
+        if isinstance(self.backend, SGLangProtocol) and self.backend.sglang_config:
+            for cfg in [
+                self.backend.sglang_config.prefill,
+                self.backend.sglang_config.aggregated,
+            ]:
+                if cfg:
+                    name = cfg.get("served-model-name") or cfg.get("served_model_name")
+                    if name:
+                        return name
+        # Fallback to model path basename
+        return Path(self.model.path).name
 
-        # Calculate resources needed
-        # Each worker needs tp_size GPUs (DP/EP don't affect GPU requirements per worker)
-        total_gpus_available = nodes * gpus_per_node
-        gpus_per_worker = tp_size
-        total_gpus_needed = gpus_per_worker * workers
-
-        # Validate: Total GPUs needed <= Total GPUs available
-        if total_gpus_needed > total_gpus_available:
-            raise ValueError(
-                f"{mode.capitalize()} resource mismatch:\n"
-                f"  Workers: {workers}\n"
-                f"  TP size: {tp_size}\n"
-                f"  GPUs per worker: {gpus_per_worker}\n"
-                f"  Total GPUs needed: {total_gpus_needed}\n"
-                f"  Total GPUs available: {total_gpus_available} ({nodes} nodes × {gpus_per_node} GPUs/node)\n"
-                f"  → Need {total_gpus_needed - total_gpus_available} more GPUs!"
-            )
-
-        # Validate: Each worker's GPUs fit on the allocated nodes
-        # For multi-node workers, TP size should span across nodes per worker
-        nodes_per_worker = nodes // workers if workers > 0 else nodes
-
-        if nodes_per_worker == 0:
-            raise ValueError(
-                f"{mode.capitalize()} resource mismatch:\n"
-                f"  Workers: {workers}\n"
-                f"  Nodes: {nodes}\n"
-                f"  → Each worker needs at least 1 node, but {nodes} nodes / {workers} workers = {nodes_per_worker} nodes/worker"
-            )
-
-        gpus_per_worker_from_nodes = nodes_per_worker * gpus_per_node
-
-        if gpus_per_worker > gpus_per_worker_from_nodes:
-            raise ValueError(
-                f"{mode.capitalize()} resource mismatch:\n"
-                f"  Workers: {workers}\n"
-                f"  Nodes per worker: {nodes_per_worker}\n"
-                f"  GPUs per worker (from TP): {gpus_per_worker}\n"
-                f"  GPUs available per worker: {gpus_per_worker_from_nodes} ({nodes_per_worker} nodes × {gpus_per_node} GPUs/node)\n"
-                f"  → Each worker needs {gpus_per_worker - gpus_per_worker_from_nodes} more GPUs!"
-            )
+    @property
+    def backend_type(self) -> str:
+        """Get the backend type string."""
+        return self.backend.type
