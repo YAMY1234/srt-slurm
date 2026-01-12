@@ -173,17 +173,43 @@ def flatten_metadata(metadata: dict) -> dict:
     flat['Model'] = args.get('served_model_name', '') or Path(args.get('model_path', '')).name[:30]
     flat['Context Length'] = args.get('context_length', '')
     
-    # 并行配置 - 使用 decode args
-    flat['TP'] = args.get('tp_size', 1)
-    flat['DP'] = args.get('dp_size', 1)
-    flat['EP'] = args.get('ep_size', 1)
-    flat['PP'] = args.get('pp_size', 1)
+    # 并行配置 - 根据模式区分显示
+    mode = metadata.get('mode', 'unknown')
     
-    # Prefill 的并行配置 (disagg 模式)
-    if metadata.get('mode') == 'disagg':
-        flat['PF TP'] = prefill_args.get('tp_size', '')
-        flat['PF DP'] = prefill_args.get('dp_size', '')
-        flat['PF EP'] = prefill_args.get('ep_size', '')
+    if mode == 'agg':
+        # Agg 模式：使用 AGG 前缀
+        flat['AGG PP'] = args.get('pp_size', 1)
+        flat['AGG TP'] = args.get('tp_size', 1)
+        flat['AGG DP'] = args.get('dp_size', 1)
+        flat['AGG EP'] = args.get('ep_size', 1)
+        # 为了兼容性，也保留不带前缀的字段
+        flat['PP'] = args.get('pp_size', 1)
+        flat['TP'] = args.get('tp_size', 1)
+        flat['DP'] = args.get('dp_size', 1)
+        flat['EP'] = args.get('ep_size', 1)
+    elif mode == 'disagg':
+        # Disagg 模式：分别显示 Prefill 和 Decode 的并行配置
+        # Prefill 的并行配置
+        flat['PF PP'] = prefill_args.get('pp_size', 1)
+        flat['PF TP'] = prefill_args.get('tp_size', 1)
+        flat['PF DP'] = prefill_args.get('dp_size', 1)
+        flat['PF EP'] = prefill_args.get('ep_size', 1)
+        # Decode 的并行配置
+        flat['DC PP'] = args.get('pp_size', 1)
+        flat['DC TP'] = args.get('tp_size', 1)
+        flat['DC DP'] = args.get('dp_size', 1)
+        flat['DC EP'] = args.get('ep_size', 1)
+        # 为了兼容性，保留不带前缀的字段（使用 decode 的值）
+        flat['PP'] = args.get('pp_size', 1)
+        flat['TP'] = args.get('tp_size', 1)
+        flat['DP'] = args.get('dp_size', 1)
+        flat['EP'] = args.get('ep_size', 1)
+    else:
+        # Unknown 模式：仅使用通用字段
+        flat['PP'] = args.get('pp_size', 1)
+        flat['TP'] = args.get('tp_size', 1)
+        flat['DP'] = args.get('dp_size', 1)
+        flat['EP'] = args.get('ep_size', 1)
     
     # 量化
     flat['Quantization'] = args.get('quantization', '')
@@ -389,9 +415,15 @@ def main():
     st.subheader("📋 Results Table")
     
     # 默认显示的列 - 包含 Score 和 Symm Mem
+    # 根据数据集中的模式动态选择并行配置列
     default_columns = [
         'Run ID', 'Name', 'Mode', 'Score',
-        'TP', 'DP', 'EP', 
+        # AGG 模式并行配置
+        'AGG PP', 'AGG TP', 'AGG DP', 'AGG EP',
+        # Disagg 模式 - Prefill 并行配置
+        'PF PP', 'PF TP', 'PF DP', 'PF EP',
+        # Disagg 模式 - Decode 并行配置
+        'DC PP', 'DC TP', 'DC DP', 'DC EP',
         'Symm Mem', 'MTP Version', 'Spec Algo', 'Spec Steps', 'Chunked Prefill',
         'Accept Len (avg)', 'Accept Rate (avg)', 'Throughput (avg)',
         'Decode Count', 'Prefill Count'
@@ -449,8 +481,12 @@ def main():
             with col1:
                 st.markdown("**Configuration**")
                 config_keys = ['Name', 'Mode', 'Model', 'Context Length',
-                              'TP', 'DP', 'EP', 'PP', 
-                              'PF TP', 'PF DP', 'PF EP',
+                              # AGG 模式并行配置
+                              'AGG PP', 'AGG TP', 'AGG DP', 'AGG EP',
+                              # Disagg - Prefill 并行配置
+                              'PF PP', 'PF TP', 'PF DP', 'PF EP',
+                              # Disagg - Decode 并行配置
+                              'DC PP', 'DC TP', 'DC DP', 'DC EP',
                               'Spec Algo', 'Spec Steps', 'Spec Draft Tokens', 'Spec Eagle TopK',
                               'Chunked Prefill', 'Disable Radix', 
                               'Attention Backend', 'DP Attention',
