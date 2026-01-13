@@ -108,20 +108,25 @@ class WorkerStageMixin:
         )
 
         # Environment variables
+        env_to_set: dict[str, str] = {"HEAD_NODE_IP": self.runtime.head_node_ip}
+
+        # Only Dynamo workers require etcd/NATS + system status server port.
         # Use IP address instead of hostname for ETCD and NATS (more reliable across network namespaces)
         # Ports are offset by (job_id % 100) * 10 to avoid conflicts between jobs
-        from srtctl.core.slurm import get_port_offset
+        if self.config.frontend.type == "dynamo":
+            from srtctl.core.slurm import get_port_offset
 
-        port_offset = get_port_offset(self.runtime.job_id)
-        nats_port = 4222 + port_offset
-        etcd_port = 2379 + port_offset
+            port_offset = get_port_offset(self.runtime.job_id)
+            nats_port = 4222 + port_offset
+            etcd_port = 2379 + port_offset
 
-        env_to_set = {
-            "HEAD_NODE_IP": self.runtime.head_node_ip,
-            "ETCD_ENDPOINTS": f"http://{self.runtime.head_node_ip}:{etcd_port}",
-            "NATS_SERVER": f"nats://{self.runtime.head_node_ip}:{nats_port}",
-            "DYN_SYSTEM_PORT": str(process.sys_port),
-        }
+            env_to_set.update(
+                {
+                    "ETCD_ENDPOINTS": f"http://{self.runtime.head_node_ip}:{etcd_port}",
+                    "NATS_SERVER": f"nats://{self.runtime.head_node_ip}:{nats_port}",
+                    "DYN_SYSTEM_PORT": str(process.sys_port),
+                }
+            )
 
         # Keep request-plane consistent across frontend/workers. Dynamo frontend defaults to NATS request plane.
         if self.config.frontend.type == "dynamo" and "DYN_REQUEST_PLANE" not in env_to_set:
@@ -138,8 +143,9 @@ class WorkerStageMixin:
 
         # Add profiling environment variables
         if profiling.enabled:
-            profile_dir = str(self.runtime.log_dir / "profiles")
-            env_to_set.update(profiling.get_env_vars(mode, profile_dir))
+            # /logs is the mounted host log directory inside the container.
+            profile_dir_in_container = "/logs/profiles"
+            env_to_set.update(profiling.get_env_vars(mode, profile_dir_in_container))
 
         # Set CUDA_VISIBLE_DEVICES if not using all GPUs
         if len(process.gpu_indices) < self.runtime.gpus_per_node:
