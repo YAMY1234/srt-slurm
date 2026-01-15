@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from srtctl.core.health import wait_for_model
-from srtctl.core.slurm import get_hostname_ip, start_srun_process
+from srtctl.core.slurm import get_hostname_ip, get_port_offset, start_srun_process
 
 if TYPE_CHECKING:
     from srtctl.benchmarks.base import BenchmarkRunner
@@ -67,9 +67,11 @@ class BenchmarkStageMixin:
             n_decode = r.num_decode
 
         hc = self.config.health_check
+        port_offset = get_port_offset(self.runtime.job_id)
+        public_port = 8000 + port_offset
         if not wait_for_model(
             host=self.runtime.nodes.head,
-            port=8000,
+            port=public_port,
             n_prefill=n_prefill,
             n_decode=n_decode,
             poll_interval=float(hc.interval_seconds),
@@ -101,7 +103,7 @@ class BenchmarkStageMixin:
 
         if benchmark_type == "manual":
             logger.info("Benchmark type is 'manual' - server is ready for testing")
-            logger.info("Frontend URL: http://%s:8000", self.runtime.nodes.head)
+            logger.info("Frontend URL: http://%s:%d", self.runtime.nodes.head, public_port)
             logger.info("Press Ctrl+C to stop the job")
 
             while not stop_event.is_set():

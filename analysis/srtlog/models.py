@@ -39,6 +39,8 @@ class RunMetadata:
     def from_json(cls, json_data: dict, run_path: str) -> "RunMetadata":
         """Create from {jobid}.json metadata format.
 
+        Supports both old format (run_metadata) and new format (version 2.0).
+
         Args:
             json_data: Parsed JSON from {jobid}.json file
             run_path: Path to the run directory
@@ -46,6 +48,40 @@ class RunMetadata:
         Returns:
             RunMetadata instance
         """
+        # Check if this is the new v2.0 format
+        if json_data.get("version") == "2.0":
+            resources = json_data.get("resources", {})
+            model = json_data.get("model", {})
+            agg_workers = resources.get("agg_workers", 0)
+
+            # Determine mode based on agg_workers
+            if agg_workers > 0:
+                mode = "aggregated"
+            else:
+                mode = "disaggregated"
+
+            return cls(
+                job_id=json_data.get("job_id", ""),
+                path=run_path,
+                run_date=json_data.get("generated_at", ""),
+                container=model.get("container", ""),
+                prefill_nodes=resources.get("prefill_nodes", 0),
+                decode_nodes=resources.get("decode_nodes", 0),
+                prefill_workers=resources.get("prefill_workers", 0),
+                decode_workers=resources.get("decode_workers", 0),
+                mode=mode,
+                job_name=json_data.get("job_name", ""),
+                partition="",
+                model_dir=model.get("path", ""),
+                gpus_per_node=resources.get("gpus_per_node", 0),
+                gpu_type=resources.get("gpu_type", ""),
+                enable_multiple_frontends=False,
+                num_additional_frontends=0,
+                agg_nodes=resources.get("agg_nodes", 0) if agg_workers > 0 else 0,
+                agg_workers=agg_workers,
+            )
+
+        # Old format with run_metadata
         run_meta = json_data.get("run_metadata", {})
         mode = run_meta.get("mode", "disaggregated")
 
@@ -172,7 +208,9 @@ class ProfilerResults:
 
     @classmethod
     def from_json(cls, json_data: dict) -> "ProfilerResults":
-        """Create from {jobid}.json profiler_metadata section.
+        """Create from {jobid}.json profiler_metadata or benchmark section.
+
+        Supports both old format (profiler_metadata) and new format (version 2.0 benchmark).
 
         Args:
             json_data: Parsed JSON from {jobid}.json file
@@ -180,6 +218,18 @@ class ProfilerResults:
         Returns:
             ProfilerResults instance (benchmark data added later from result files)
         """
+        # Check if this is the new v2.0 format
+        if json_data.get("version") == "2.0":
+            benchmark = json_data.get("benchmark", {})
+            return cls(
+                profiler_type=benchmark.get("type", "unknown"),
+                isl=str(benchmark.get("isl", "")),
+                osl=str(benchmark.get("osl", "")),
+                concurrencies=benchmark.get("concurrencies", ""),
+                req_rate=benchmark.get("req-rate", ""),
+            )
+
+        # Old format with profiler_metadata
         profiler_meta = json_data.get("profiler_metadata", {})
 
         return cls(
@@ -241,6 +291,34 @@ class ProfilerResults:
         self.num_prompts = results.get("num_prompts", [])
 
 
+def _extract_job_id_from_dirname(dirname: str) -> str:
+    """Extract job ID from directory name.
+
+    Supports multiple formats:
+    - "2518" (just job ID)
+    - "2520-pp_tp_mtp2" (new format: {job_id}-{name})
+    - "3667_1P_1D_20251110_192145" (old format: {job_id}_{topology}_{timestamp})
+
+    Args:
+        dirname: Directory name
+
+    Returns:
+        Job ID as string, or the dirname itself if no separator found
+    """
+    # Try hyphen first (new format)
+    if "-" in dirname:
+        first_part = dirname.split("-")[0]
+        if first_part.isdigit():
+            return first_part
+    # Fall back to underscore (old format)
+    if "_" in dirname:
+        first_part = dirname.split("_")[0]
+        if first_part.isdigit():
+            return first_part
+    # No separator or first part is not a digit, return as-is
+    return dirname
+
+
 @dataclass
 class BenchmarkRun:
     """Complete benchmark run with metadata and profiler results."""
@@ -266,7 +344,7 @@ class BenchmarkRun:
 
         # Extract job ID from directory name
         dirname = os.path.basename(run_path)
-        job_id = dirname.split("_")[0]
+        job_id = _extract_job_id_from_dirname(dirname)
         json_path = os.path.join(run_path, f"{job_id}.json")
 
         if not os.path.exists(json_path):

@@ -67,6 +67,17 @@ class SABenchRunner(BenchmarkRunner):
         if isinstance(concurrencies, list):
             concurrencies = "x".join(str(c) for c in concurrencies)
 
+        # Get model name from sglang config (prefer decode, fallback to prefill, then default)
+        model_name = "nvidia/DeepSeek-R1-0528-NVFP4-v2"
+        sglang_config = config.backend.sglang_config
+        if sglang_config:
+            if sglang_config.decode and "served-model-name" in sglang_config.decode:
+                model_name = sglang_config.decode["served-model-name"]
+            elif sglang_config.prefill and "served-model-name" in sglang_config.prefill:
+                model_name = sglang_config.prefill["served-model-name"]
+            elif sglang_config.agg and "served-model-name" in sglang_config.agg:
+                model_name = sglang_config.agg["served-model-name"]
+
         return [
             "bash",
             self.script_path,
@@ -75,4 +86,5 @@ class SABenchRunner(BenchmarkRunner):
             str(b.osl),
             str(concurrencies) if concurrencies else "",
             str(b.req_rate) if b.req_rate else "inf",
+            model_name,
         ]

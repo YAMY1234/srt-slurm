@@ -31,6 +31,34 @@ class RunLoader:
         """
         self.logs_dir = logs_dir
 
+    @staticmethod
+    def extract_job_id_from_dirname(dirname: str) -> str:
+        """Extract job ID from directory name.
+
+        Supports multiple formats:
+        - "2518" (just job ID)
+        - "2520-pp_tp_mtp2" (new format: {job_id}-{name})
+        - "3667_1P_1D_20251110_192145" (old format: {job_id}_{topology}_{timestamp})
+
+        Args:
+            dirname: Directory name
+
+        Returns:
+            Job ID as string, or the dirname itself if no separator found
+        """
+        # Try hyphen first (new format)
+        if "-" in dirname:
+            first_part = dirname.split("-")[0]
+            if first_part.isdigit():
+                return first_part
+        # Fall back to underscore (old format)
+        if "_" in dirname:
+            first_part = dirname.split("_")[0]
+            if first_part.isdigit():
+                return first_part
+        # No separator or first part is not a digit, return as-is
+        return dirname
+
     def load_all(self) -> list[BenchmarkRun]:
         """Load all benchmark runs from the logs directory.
 
@@ -89,13 +117,13 @@ class RunLoader:
                         skipped.append((run.job_id, run_dir, reason))
                 else:
                     # Extract job ID from directory name for skipped list
-                    job_id = run_dir.split("_")[0] if "_" in run_dir else run_dir
+                    job_id = self.extract_job_id_from_dirname(run_dir)
                     reason = "No metadata JSON file"
                     logger.warning(f"No metadata JSON found for {run_dir}")
                     skipped.append((job_id, run_dir, reason))
             except Exception as e:
                 # Extract job ID from directory name for skipped list
-                job_id = run_dir.split("_")[0] if "_" in run_dir else run_dir
+                job_id = self.extract_job_id_from_dirname(run_dir)
                 reason = f"Error loading: {str(e)}"
                 logger.error(f"Error loading run from {path}: {e}")
                 skipped.append((job_id, run_dir, reason))
@@ -146,7 +174,7 @@ class RunLoader:
         run_path = os.path.join(self.logs_dir, run_dir) if not os.path.isabs(run_dir) else run_dir
 
         dirname = os.path.basename(run_path)
-        job_id = dirname.split("_")[0]
+        job_id = self.extract_job_id_from_dirname(dirname)
         json_path = os.path.join(run_path, f"{job_id}.json")
         return os.path.exists(json_path)
 
@@ -178,8 +206,8 @@ class RunLoader:
                 continue
 
             # Only include directories that start with a numeric job ID
-            first_part = entry.split("_")[0]
-            if not first_part.isdigit():
+            job_id = self.extract_job_id_from_dirname(entry)
+            if not job_id.isdigit():
                 continue
 
             paths.append(full_path)
@@ -190,13 +218,13 @@ class RunLoader:
         """Extract numeric job ID from directory name for sorting.
 
         Args:
-            dirname: Directory name like "3667_1P_1D_20251110_192145"
+            dirname: Directory name like "3667_1P_1D_20251110_192145" or "2520-pp_tp_mtp2"
 
         Returns:
             Job ID as integer, or -1 if not parseable
         """
         try:
-            return int(dirname.split("_")[0])
+            return int(self.extract_job_id_from_dirname(dirname))
         except (ValueError, IndexError):
             return -1
 
@@ -596,7 +624,7 @@ class RunLoader:
 
         # Extract job ID from directory name
         dirname = os.path.basename(run_path)
-        job_id = dirname.split("_")[0]
+        job_id = self.extract_job_id_from_dirname(dirname)
         json_path = os.path.join(run_path, f"{job_id}.json")
 
         if not os.path.exists(json_path):

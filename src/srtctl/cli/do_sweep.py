@@ -32,7 +32,7 @@ from srtctl.core.processes import (
 )
 from srtctl.core.runtime import RuntimeContext
 from srtctl.core.schema import SrtConfig
-from srtctl.core.slurm import get_slurm_job_id, start_srun_process
+from srtctl.core.slurm import get_port_offset, get_slurm_job_id, start_srun_process
 from srtctl.core.topology import Endpoint, Process
 from srtctl.logging_utils import setup_logging
 
@@ -121,13 +121,20 @@ class SweepOrchestrator(WorkerStageMixin, FrontendStageMixin, BenchmarkStageMixi
             critical=True,
         )
 
-        logger.info("Waiting for NATS (port 4222)...")
-        if not wait_for_port(self.runtime.nodes.head, 4222, timeout=60):
+        # Calculate port offset based on job_id
+        port_offset = get_port_offset(self.runtime.job_id)
+        nats_port = 4222 + port_offset
+        etcd_port = 2379 + port_offset
+
+        logger.info("Port offset for this job: %d (job_id: %s)", port_offset, self.runtime.job_id)
+
+        logger.info("Waiting for NATS (port %d)...", nats_port)
+        if not wait_for_port(self.runtime.nodes.head, nats_port, timeout=60):
             raise RuntimeError("NATS failed to start")
         logger.info("NATS is ready")
 
-        logger.info("Waiting for etcd (port 2379)...")
-        if not wait_for_port(self.runtime.nodes.head, 2379, timeout=60):
+        logger.info("Waiting for etcd (port %d)...", etcd_port)
+        if not wait_for_port(self.runtime.nodes.head, etcd_port, timeout=60):
             raise RuntimeError("etcd failed to start")
         logger.info("etcd is ready")
 
@@ -140,11 +147,15 @@ class SweepOrchestrator(WorkerStageMixin, FrontendStageMixin, BenchmarkStageMixi
         if mounts_str:
             container_args += f" --container-mounts={mounts_str}"
 
+        # Calculate public port with offset
+        port_offset = get_port_offset(self.runtime.job_id)
+        public_port = 8000 + port_offset
+
         logger.info("")
         logger.info("=" * 60)
         logger.info("Connection Commands")
         logger.info("=" * 60)
-        logger.info("Frontend URL: http://%s:8000", self.runtime.nodes.head)
+        logger.info("Frontend URL: http://%s:%d", self.runtime.nodes.head, public_port)
         logger.info("")
         logger.info("To connect to head node (%s):", self.runtime.nodes.head)
         logger.info(

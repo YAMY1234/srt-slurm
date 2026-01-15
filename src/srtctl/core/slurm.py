@@ -34,6 +34,36 @@ def get_slurm_job_id() -> str | None:
     return os.environ.get("SLURM_JOB_ID") or os.environ.get("SLURM_JOBID")
 
 
+def get_port_offset(job_id: str | None = None) -> int:
+    """Calculate port offset based on SLURM job ID to avoid conflicts.
+
+    When multiple jobs run on the same nodes, they need different port ranges.
+    This function computes an offset based on job_id: (job_id % 100) * 10
+
+    Args:
+        job_id: SLURM job ID (if None, reads from environment)
+
+    Returns:
+        Port offset to add to base ports (0-990)
+
+    Example:
+        Job 2437: (2437 % 100) * 10 = 370
+        Job 2518: (2518 % 100) * 10 = 180
+    """
+    if job_id is None:
+        job_id = get_slurm_job_id()
+
+    if not job_id:
+        return 0
+
+    try:
+        offset = (int(job_id) % 100) * 10
+        logger.debug("Port offset for job %s: %d", job_id, offset)
+        return offset
+    except (ValueError, TypeError):
+        return 0
+
+
 def get_slurm_nodelist() -> list[str]:
     """Get list of nodes from SLURM_NODELIST environment variable.
 

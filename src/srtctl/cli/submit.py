@@ -51,7 +51,7 @@ def generate_minimal_sbatch_script(
     config: SrtConfig,
     config_path: Path,
     setup_script: str | None = None,
-) -> str:
+) -> tuple[str, str]:
     """Generate minimal sbatch script that calls the Python orchestrator.
 
     The orchestrator runs INSIDE the container on the head node.
@@ -63,7 +63,7 @@ def generate_minimal_sbatch_script(
         setup_script: Optional setup script override (passed via env var)
 
     Returns:
-        Rendered sbatch script as string
+        Tuple of (rendered_script, recipe_name)
     """
     from jinja2 import Environment, FileSystemLoader
 
@@ -84,6 +84,9 @@ def generate_minimal_sbatch_script(
     # Resolve container image path (expand aliases from srtslurm.yaml)
     container_image = os.path.expandvars(config.model.container)
 
+    # Extract recipe name from config path
+    recipe_name = config_path.stem if config_path else "unknown"
+
     rendered = template.render(
         job_name=config.name,
         total_nodes=total_nodes,
@@ -93,6 +96,7 @@ def generate_minimal_sbatch_script(
         time_limit=config.slurm.time_limit or "01:00:00",
         config_path=str(config_path.resolve()),
         timestamp=timestamp,
+        recipe_name=recipe_name,
         use_gpus_per_node_directive=get_srtslurm_setting("use_gpus_per_node_directive", True),
         use_segment_sbatch_directive=get_srtslurm_setting("use_segment_sbatch_directive", True),
         sbatch_directives=config.sbatch_directives,
@@ -101,7 +105,7 @@ def generate_minimal_sbatch_script(
         setup_script=setup_script,
     )
 
-    return rendered
+    return rendered, recipe_name
 
 
 def submit_with_orchestrator(
@@ -126,7 +130,7 @@ def submit_with_orchestrator(
     if config is None:
         config = load_config(config_path)
 
-    script_content = generate_minimal_sbatch_script(
+    script_content, recipe_name = generate_minimal_sbatch_script(
         config=config,
         config_path=config_path,
         setup_script=setup_script,
@@ -168,7 +172,10 @@ def submit_with_orchestrator(
         # Use project root for consistent output location
         srtctl_root = get_srtslurm_setting("srtctl_root")
         srtctl_source = Path(srtctl_root) if srtctl_root else Path(__file__).parent.parent.parent.parent
-        output_dir = srtctl_source / "outputs" / job_id
+
+        # Build directory name: {job_id}-{recipe_name}
+        dir_name = f"{job_id}-{recipe_name}"
+        output_dir = srtctl_source / "outputs" / dir_name
         output_dir.mkdir(parents=True, exist_ok=True)
 
         shutil.copy(config_path, output_dir / "config.yaml")

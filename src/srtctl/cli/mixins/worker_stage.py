@@ -109,10 +109,18 @@ class WorkerStageMixin:
         )
 
         # Environment variables
+        # Use IP address instead of hostname for ETCD and NATS (more reliable across network namespaces)
+        # Ports are offset by (job_id % 100) * 10 to avoid conflicts between jobs
+        from srtctl.core.slurm import get_port_offset
+
+        port_offset = get_port_offset(self.runtime.job_id)
+        nats_port = 4222 + port_offset
+        etcd_port = 2379 + port_offset
+
         env_to_set = {
             "HEAD_NODE_IP": self.runtime.head_node_ip,
-            "ETCD_ENDPOINTS": f"http://{self.runtime.nodes.head}:2379",
-            "NATS_SERVER": f"nats://{self.runtime.nodes.head}:4222",
+            "ETCD_ENDPOINTS": f"http://{self.runtime.head_node_ip}:{etcd_port}",
+            "NATS_SERVER": f"nats://{self.runtime.head_node_ip}:{nats_port}",
             "DYN_SYSTEM_PORT": str(process.sys_port),
         }
 
