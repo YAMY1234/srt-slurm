@@ -48,6 +48,8 @@ configs/etcdctl
 configs/*.whl
 configs/*.deb
 configs/*.tar.gz
+configs/flashinfer-cache/*
+outputs/*
 
 .ruff_cache/
 *.egg-info/
