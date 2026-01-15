@@ -7,7 +7,7 @@ model:
   container: "yamy-1215"
   precision: "fp4"
 
-extra_mount: ["/home/yangminl/sglang:/sgl-workspace/sglang"]
+extra_mount: ["/home/yangminl/files/workspace2/sglang:/sgl-workspace/sglang"]
 
 resources:
   gpu_type: "gb300"
@@ -19,6 +19,7 @@ resources:
 
 backend:
   aggregated_environment:
+    SGLANG_SYMM_MEM_PREALLOC_GB_SIZE: '8'
     FLASHINFER_DISABLE_VERSION_CHECK: "1"
     TORCH_DISTRIBUTED_DEFAULT_TIMEOUT: "1800"
     PYTHONUNBUFFERED: "1"

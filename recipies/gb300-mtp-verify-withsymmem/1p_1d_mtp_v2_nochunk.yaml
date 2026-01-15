@@ -17,6 +17,7 @@ resources:
 backend:
 
   decode_environment:
+    SGLANG_SYMM_MEM_PREALLOC_GB_SIZE: '8'
     DYN_SKIP_SGLANG_LOG_FORMATTING: '1'
     FLASHINFER_DISABLE_VERSION_CHECK: '1'
     FLASHINFER_WORKSPACE_BASE: /configs/flashinfer-cache
@@ -39,6 +40,7 @@ backend:
     SGLANG_FUTURE_MAP_SCALE: '8'
 
   prefill_environment:
+    SGLANG_SYMM_MEM_PREALLOC_GB_SIZE: '8'
     DYN_SKIP_SGLANG_LOG_FORMATTING: '1'
     FLASHINFER_DISABLE_VERSION_CHECK: '1'
     FLASHINFER_WORKSPACE_BASE: /configs/flashinfer-cache
@@ -123,7 +125,7 @@ backend:
       speculative-num-draft-tokens: 3
 
 extra_mount:
-  - "/home/yangminl/sglang:/sgl-workspace/sglang"
+  - "/home/yangminl/files/workspace2/sglang:/sgl-workspace/sglang"
 
 benchmark:
   type: "longbenchv2"
