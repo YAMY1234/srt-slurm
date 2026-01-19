@@ -123,12 +123,37 @@ class LogParser:
     def __init__(self, run_dir: Path):
         self.run_dir = run_dir
         self.config_path = run_dir / "config.yaml"
-        self.benchmark_path = run_dir / "benchmark.out"
         self.metadata_path = run_dir / "metadata.yaml"
+        
+        # 检测日志文件位置：可能在 run_dir 根目录或 run_dir/logs 子目录
+        self.logs_subdir = self._detect_logs_location()
+        
+        # benchmark.out 的位置
+        if self.logs_subdir:
+            self.benchmark_path = self.logs_subdir / "benchmark.out"
+        else:
+            self.benchmark_path = run_dir / "benchmark.out"
         
         # 判断是 agg 还是 disagg 模式
         self.mode = self._detect_mode()
+    
+    def _detect_logs_location(self) -> Optional[Path]:
+        """
+        检测日志文件的位置
+        返回 logs 子目录的路径，如果日志在根目录则返回 None
+        """
+        logs_subdir = self.run_dir / "logs"
         
+        # 检查 logs 子目录是否存在且包含日志文件
+        if logs_subdir.exists() and logs_subdir.is_dir():
+            # 检查是否有 _w0.out 或 _w1.out 等日志文件
+            for f in logs_subdir.iterdir():
+                if f.name.endswith('_w0.out') or f.name.endswith('_w1.out'):
+                    return logs_subdir
+        
+        # 否则日志在根目录
+        return None
+    
     def _detect_mode(self) -> str:
         """检测运行模式：agg 或 disagg"""
         # 从目录名判断：包含 _1A_ 表示 agg，包含 _P_D_ 表示 disagg
@@ -139,7 +164,10 @@ class LogParser:
             return 'disagg'
         
         # 从文件存在性判断
-        for f in self.run_dir.iterdir():
+        # 确定要扫描的目录（根目录或 logs 子目录）
+        scan_dir = self.logs_subdir if self.logs_subdir else self.run_dir
+        
+        for f in scan_dir.iterdir():
             if f.name.endswith('_agg_w0.out'):
                 return 'agg'
             if f.name.endswith('_prefill_w0.out') or f.name.endswith('_decode_w0.out'):
@@ -147,17 +175,34 @@ class LogParser:
         
         return 'unknown'
     
-    def _find_server_logs(self) -> Dict[str, Path]:
-        """查找 server 日志文件"""
+    def _find_server_logs(self) -> Dict[str, Any]:
+        """查找 server 日志文件（支持多个 worker）"""
         logs = {}
         
-        for f in self.run_dir.iterdir():
-            if f.name.endswith('_agg_w0.out'):
-                logs['agg'] = f
-            elif f.name.endswith('_prefill_w0.out'):
-                logs['prefill'] = f
-            elif f.name.endswith('_decode_w0.out'):
-                logs['decode'] = f
+        # 确定要扫描的目录（根目录或 logs 子目录）
+        scan_dir = self.logs_subdir if self.logs_subdir else self.run_dir
+        
+        prefill_logs = []
+        decode_logs = []
+        
+        for f in sorted(scan_dir.iterdir()):
+            if f.is_file():
+                # 匹配 _agg_w*.out
+                if '_agg_w' in f.name and f.name.endswith('.out'):
+                    if 'agg' not in logs:
+                        logs['agg'] = []
+                    logs['agg'].append(f)
+                # 匹配 _prefill_w*.out
+                elif '_prefill_w' in f.name and f.name.endswith('.out'):
+                    prefill_logs.append(f)
+                # 匹配 _decode_w*.out
+                elif '_decode_w' in f.name and f.name.endswith('.out'):
+                    decode_logs.append(f)
+        
+        if prefill_logs:
+            logs['prefill'] = prefill_logs
+        if decode_logs:
+            logs['decode'] = decode_logs
         
         return logs
         
@@ -207,13 +252,27 @@ class LogParser:
         
         return self._parse_worker_log(server_logs['agg'])
     
-    def _parse_worker_log(self, log_path: Optional[Path]) -> Dict[str, Any]:
-        """解析单个 worker 的日志，提取 ServerArgs"""
-        if log_path is None or not log_path.exists():
+    def _parse_worker_log(self, log_path: Any) -> Dict[str, Any]:
+        """解析 worker 的日志，提取 ServerArgs（支持单个或多个 worker）"""
+        # 支持单个 Path 或 Path 列表
+        if log_path is None:
+            return {'error': 'log file not found'}
+        
+        # 如果是列表，取第一个（所有 worker 配置应该相同）
+        if isinstance(log_path, list):
+            if not log_path:
+                return {'error': 'log file not found'}
+            actual_path = log_path[0]
+            worker_count = len(log_path)
+        else:
+            actual_path = log_path
+            worker_count = 1
+        
+        if not actual_path.exists():
             return {'error': 'log file not found'}
         
         try:
-            with open(log_path, 'r', errors='ignore') as f:
+            with open(actual_path, 'r', errors='ignore') as f:
                 content = f.read()
             
             server_args = parse_server_args(content)
@@ -223,6 +282,7 @@ class LogParser:
             # 提取关键参数
             result = self._extract_key_params(server_args)
             result['_raw_count'] = len(server_args)
+            result['_worker_count'] = worker_count
             
             return result
             
@@ -264,13 +324,23 @@ class LogParser:
         
         return result
     
-    def _parse_all_stats(self, server_logs: Dict[str, Path]) -> Dict[str, Any]:
-        """解析所有日志的性能统计"""
+    def _parse_all_stats(self, server_logs: Dict[str, Any]) -> Dict[str, Any]:
+        """解析所有日志的性能统计（支持多个 worker）"""
         stats = {}
         
         for log_type, log_path in server_logs.items():
-            if log_path and log_path.exists():
-                log_stats = self._parse_log_stats(log_path)
+            if log_path:
+                # 支持单个日志或日志列表
+                if isinstance(log_path, list):
+                    # 多个 worker：合并所有统计数据
+                    log_stats = self._parse_multiple_log_stats(log_path)
+                else:
+                    # 单个 worker
+                    if log_path.exists():
+                        log_stats = self._parse_log_stats(log_path)
+                    else:
+                        log_stats = {'error': 'log file not found'}
+                
                 stats[log_type] = log_stats
         
         return stats
@@ -349,6 +419,82 @@ class LogParser:
         
         return result
     
+    def _parse_multiple_log_stats(self, log_paths: List[Path]) -> Dict[str, Any]:
+        """解析并合并多个 worker 的日志统计"""
+        all_prefill_stats = []
+        all_decode_stats = []
+        
+        for log_path in log_paths:
+            if not log_path.exists():
+                continue
+            
+            try:
+                with open(log_path, 'r', errors='ignore') as f:
+                    lines = f.readlines()
+            except Exception:
+                continue
+            
+            # 正则表达式
+            prefill_pattern = re.compile(
+                r'Prefill batch, #new-seq: (\d+), #new-token: (\d+), #cached-token: (\d+), '
+                r'token usage: ([\d.]+), #running-req: (\d+), #queue-req: (\d+)'
+            )
+            
+            decode_pattern = re.compile(
+                r'Decode batch, #running-req: (\d+), #token: (\d+), token usage: ([\d.]+), '
+                r'accept len: ([\d.]+), accept rate: ([\d.]+), '
+                r'(?:pre-allocated usage: [\d.]+, #prealloc-req: \d+, #transfer-req: \d+, #retracted-req: \d+, )?'
+                r'cuda graph: \w+, '
+                r'gen throughput \(token/s\): ([\d.]+), #queue-req: (\d+)'
+            )
+            
+            for line in lines:
+                # 解析 Prefill
+                match = prefill_pattern.search(line)
+                if match:
+                    all_prefill_stats.append({
+                        'new_seq': int(match.group(1)),
+                        'new_token': int(match.group(2)),
+                        'cached_token': int(match.group(3)),
+                        'token_usage': float(match.group(4)),
+                        'running_req': int(match.group(5)),
+                        'queue_req': int(match.group(6)),
+                    })
+                    continue
+                
+                # 解析 Decode
+                match = decode_pattern.search(line)
+                if match:
+                    all_decode_stats.append({
+                        'running_req': int(match.group(1)),
+                        'token': int(match.group(2)),
+                        'token_usage': float(match.group(3)),
+                        'accept_len': float(match.group(4)),
+                        'accept_rate': float(match.group(5)),
+                        'gen_throughput': float(match.group(6)),
+                        'queue_req': int(match.group(7)),
+                    })
+        
+        result = {
+            'prefill_count': len(all_prefill_stats),
+            'decode_count': len(all_decode_stats),
+            'worker_count': len(log_paths),
+        }
+        
+        # 计算合并后的 Prefill 统计
+        if all_prefill_stats:
+            result['prefill'] = self._compute_stats(all_prefill_stats, [
+                'new_seq', 'new_token', 'cached_token', 'token_usage', 'running_req', 'queue_req'
+            ])
+        
+        # 计算合并后的 Decode 统计
+        if all_decode_stats:
+            result['decode'] = self._compute_stats(all_decode_stats, [
+                'running_req', 'token', 'token_usage', 'accept_len', 'accept_rate', 'gen_throughput', 'queue_req'
+            ])
+        
+        return result
+    
     def _compute_stats(self, data: List[Dict], fields: List[str]) -> Dict[str, Dict]:
         """计算指定字段的统计值（平均、最大、最小）"""
         stats = {}
@@ -375,7 +521,7 @@ class LogParser:
             with open(self.benchmark_path, 'r', errors='ignore') as f:
                 content = f.read()
             
-            # 匹配 Score: 0.550
+            # 匹配 Score: 0.550 (旧格式)
             score_match = re.search(r'^Score:\s*([\d.]+)', content, re.MULTILINE)
             if score_match:
                 result['score'] = float(score_match.group(1))
@@ -385,7 +531,7 @@ class LogParser:
             if latency_match:
                 result['total_latency_s'] = float(latency_match.group(1))
             
-            # 匹配详细的 score 字典
+            # 匹配详细的 score 字典 (旧格式)
             # {'chars': np.float64(5731.87...), ..., 'score': np.float64(0.5498...)}
             score_dict_match = re.search(r"'score':\s*np\.float64\(([\d.]+)\)", content)
             if score_dict_match:
@@ -400,6 +546,34 @@ class LogParser:
             hard_match = re.search(r"'difficulty_hard':\s*np\.float64\(([\d.]+)\)", content)
             if hard_match:
                 result['difficulty_hard'] = float(hard_match.group(1))
+            
+            # GPQA 格式：[METRIC] gpqa_mean_score=0.7689393939393939
+            gpqa_score_match = re.search(r'\[METRIC\]\s+gpqa_mean_score=([\d.]+)', content)
+            if gpqa_score_match:
+                result['gpqa_mean_score'] = float(gpqa_score_match.group(1))
+            
+            # GPQA: Repeat: 8, mean: 0.769
+            gpqa_mean_match = re.search(r'Repeat:\s*(\d+),\s*mean:\s*([\d.]+)', content)
+            if gpqa_mean_match:
+                result['repeat'] = int(gpqa_mean_match.group(1))
+                result['mean_score'] = float(gpqa_mean_match.group(2))
+            
+            # GPQA: Scores: ['0.773', '0.758', '0.803', ...]
+            gpqa_scores_match = re.search(r"Scores:\s*\[(.*?)\]", content)
+            if gpqa_scores_match:
+                scores_str = gpqa_scores_match.group(1)
+                scores = [float(s.strip().strip("'\"")) for s in scores_str.split(',')]
+                result['scores'] = scores
+            
+            # GPQA: 'mean_score': np.float64(0.7689393939393939)
+            gpqa_mean_detailed = re.search(r"'mean_score':\s*np\.float64\(([\d.]+)\)", content)
+            if gpqa_mean_detailed:
+                result['mean_score_detailed'] = float(gpqa_mean_detailed.group(1))
+            
+            # GPQA: 'chars': np.float64(23841.065656565657)
+            chars_match = re.search(r"'chars':\s*np\.float64\(([\d.]+)\)", content)
+            if chars_match:
+                result['avg_chars'] = float(chars_match.group(1))
             
             return result
             
@@ -482,14 +656,26 @@ def find_run_dirs(logs_dir: Path) -> List[Path]:
     for item in logs_dir.iterdir():
         if item.is_dir():
             # 检查是否有 server log 或 config.yaml
-            has_log = any(
+            # 日志可能在根目录或 logs/ 子目录中
+            has_log_in_root = any(
                 f.name.endswith('_w0.out') 
                 for f in item.iterdir() 
                 if f.is_file()
             )
+            
+            # 检查 logs 子目录
+            logs_subdir = item / "logs"
+            has_log_in_subdir = False
+            if logs_subdir.exists() and logs_subdir.is_dir():
+                has_log_in_subdir = any(
+                    f.name.endswith('_w0.out') or f.name.endswith('_w1.out')
+                    for f in logs_subdir.iterdir()
+                    if f.is_file()
+                )
+            
             has_config = (item / "config.yaml").exists()
             
-            if has_log or has_config:
+            if has_log_in_root or has_log_in_subdir or has_config:
                 run_dirs.append(item)
     
     return sorted(run_dirs)
