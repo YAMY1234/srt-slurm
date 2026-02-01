@@ -85,18 +85,13 @@ class SweepOrchestrator(WorkerStageMixin, FrontendStageMixin, BenchmarkStageMixi
         # Note: srtctl allocates one sys_port per Process and increments sequentially from base_sys_port.
         # Therefore, base_sys_port must reserve a sufficiently large consecutive port window per job
         # to avoid collisions with other jobs running concurrently.
-        try:
-            job_id_int = int(self.runtime.job_id)
-        except ValueError:
-            logger.warning("Non-numeric job_id '%s', using base sys port offset 0", self.runtime.job_id)
-            job_id_int = 0
-
-        sys_port_min = 8081
-        sys_port_max_i16 = 32767
-        sys_port_stride = 200  # Reserve up to 200 consecutive sys ports per job.
-        sys_port_slots = ((sys_port_max_i16 - sys_port_min) // sys_port_stride) + 1
-
-        base_sys_port = sys_port_min + ((job_id_int % sys_port_slots) * sys_port_stride)
+        #
+        # Use get_port_offset() for consistency with other services (NATS, etcd, frontend).
+        # get_port_offset returns 0-990 in steps of 10, giving 100 slots.
+        # Each slot needs ~200 ports for sys_port allocation, so we multiply offset by 20.
+        port_offset = get_port_offset(self.runtime.job_id)
+        sys_port_stride = 200  # Reserved consecutive sys ports per job.
+        base_sys_port = 9000 + (port_offset * 20)  # Range: 9000-28800, step 200
 
         port_allocator: NodePortAllocator | None = None
         if self.config.frontend.type == "sglang" and getattr(self.backend, "type", None) == "sglang":

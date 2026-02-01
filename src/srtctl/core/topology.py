@@ -386,11 +386,10 @@ def endpoints_to_processes(
     Returns:
         List of Process objects
     """
-    from srtctl.core.slurm import get_port_offset
-
     processes: list[Process] = []
-    port_offset = get_port_offset(job_id)
-    current_sys_port = base_sys_port + port_offset
+    # Note: base_sys_port already includes job-based offset from do_sweep.py,
+    # so we don't add port_offset here to avoid double-counting
+    current_sys_port = base_sys_port
 
     if port_allocator is None:
         port_allocator = NodePortAllocator.with_job_offset(job_id)

@@ -66,11 +66,23 @@ echo ""
 # Start profiling before benchmark
 start_all_profiling
 
-# Warmup
+# Warmup - use same settings as benchmark for proper cache warming
 for concurrency in "${CONCURRENCY_LIST[@]}"; do
     echo "Warming up with concurrency $concurrency"
     echo "$(date '+%Y-%m-%d %H:%M:%S')"
-    num_prompts=$((concurrency * 5))
+    # Scale warmup prompts based on concurrency to avoid excessive warmup time
+    # Large concurrency: fewer multiplier, small concurrency: more multiplier
+    if [ "$concurrency" -ge 1024 ]; then
+        warmup_prompts=$((concurrency * 1))
+    elif [ "$concurrency" -ge 512 ]; then
+        warmup_prompts=$((concurrency * 2))
+    else
+        warmup_prompts=$((concurrency * 3))
+    fi
+    # Ensure minimum 6 warmup prompts for CUDA graph compilation
+    if [ "$warmup_prompts" -lt 6 ]; then
+        warmup_prompts=6
+    fi
     set -x
     python3 -u "${WORK_DIR}/benchmark_serving.py" \
         --model "${MODEL_NAME}" --tokenizer "${MODEL_PATH}" \
@@ -78,12 +90,12 @@ for concurrency in "${CONCURRENCY_LIST[@]}"; do
         --backend "dynamo" --endpoint /v1/completions \
         --disable-tqdm \
         --dataset-name random \
-        --num-prompts "$num_prompts" \
+        --num-prompts "$warmup_prompts" \
         --random-input-len "$ISL" \
         --random-output-len "$OSL" \
-        --random-range-ratio 1 \
+        --random-range-ratio 0.8 \
         --ignore-eos \
-        --request-rate 250 \
+        --request-rate "${REQ_RATE}" \
         --percentile-metrics ttft,tpot,itl,e2el \
         --max-concurrency "$concurrency"
     set +x
@@ -94,7 +106,21 @@ result_dir="/logs/sa-bench_isl_${ISL}_osl_${OSL}"
 mkdir -p "$result_dir"
 
 for concurrency in "${CONCURRENCY_LIST[@]}"; do
-    num_prompts=$((concurrency * 5))
+    # Scale benchmark prompts based on concurrency to balance accuracy vs time
+    # Large concurrency: fewer multiplier, small concurrency: more multiplier
+    if [ "$concurrency" -ge 1024 ]; then
+        num_prompts=$((concurrency * 2))
+    elif [ "$concurrency" -ge 512 ]; then
+        num_prompts=$((concurrency * 3))
+    elif [ "$concurrency" -ge 128 ]; then
+        num_prompts=$((concurrency * 4))
+    else
+        num_prompts=$((concurrency * 5))
+    fi
+    # Ensure minimum 30 samples for statistical stability
+    if [ "$num_prompts" -lt 30 ]; then
+        num_prompts=30
+    fi
     result_filename="isl_${ISL}_osl_${OSL}_concurrency_${concurrency}_req_rate_${REQ_RATE}.json"
     
     echo "Running benchmark with concurrency: $concurrency"
