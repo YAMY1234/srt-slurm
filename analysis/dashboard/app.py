@@ -422,7 +422,7 @@ def main():
     )
 
     with tab1:
-        pareto_tab.render(df, selected_runs, run_legend_labels, pareto_options)
+        pareto_tab.render(df, selected_runs, run_legend_labels, pareto_options, filtered_runs)
 
     with tab2:
         latency_tab.render(df, selected_runs)

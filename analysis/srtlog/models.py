@@ -411,7 +411,7 @@ class BatchMetrics:
     tp: int
     ep: int
     batch_type: str  # "prefill" or "decode"
-    # Optional metrics
+    # Optional metrics - Prefill
     new_seq: int | None = None
     new_token: int | None = None
     cached_token: int | None = None
@@ -421,10 +421,14 @@ class BatchMetrics:
     prealloc_req: int | None = None
     inflight_req: int | None = None
     input_throughput: float | None = None
+    # Optional metrics - Decode
     gen_throughput: float | None = None
     transfer_req: int | None = None
     num_tokens: int | None = None
     preallocated_usage: float | None = None
+    accept_len: float | None = None
+    accept_rate: float | None = None
+    retracted_req: int | None = None
 
     @property
     def cache_hit_rate(self) -> float | None:

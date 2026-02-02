@@ -148,10 +148,13 @@ class NodeAnalyzer:
                                 queue_req=decode_metrics.get("queue_req"),
                                 prealloc_req=decode_metrics.get("prealloc_req"),
                                 transfer_req=decode_metrics.get("transfer_req"),
+                                retracted_req=decode_metrics.get("retracted_req"),
                                 token_usage=decode_metrics.get("token_usage"),
                                 preallocated_usage=decode_metrics.get("preallocated_usage"),
                                 num_tokens=decode_metrics.get("num_tokens"),
                                 gen_throughput=decode_metrics.get("gen_throughput"),
+                                accept_len=decode_metrics.get("accept_len"),
+                                accept_rate=decode_metrics.get("accept_rate"),
                             )
                         )
 
@@ -259,6 +262,96 @@ class NodeAnalyzer:
         """
         return any(len(n.batches) > 0 for n in nodes)
 
+    def _dataframe_to_dicts(self, df: pd.DataFrame) -> list:
+        """Convert cached DataFrame directly to dict format (skipping NodeMetrics objects).
+
+        This is a faster path when dicts are needed instead of NodeMetrics objects.
+
+        Args:
+            df: DataFrame with cached node metrics
+
+        Returns:
+            List of node data dicts compatible with visualization code
+        """
+        nodes = []
+
+        # Group by node
+        for (node_name, worker_type, worker_id), group_df in df.groupby(
+            ["node", "worker_type", "worker_id"], dropna=False
+        ):
+            node_info = {
+                "node": node_name,
+                "worker_type": worker_type,
+                "worker_id": worker_id,
+            }
+
+            # Extract config (same for all rows in this node)
+            config = {}
+            if not group_df.empty:
+                first_row = group_df.iloc[0]
+                if pd.notna(first_row.get("tp_size")):
+                    config["tp_size"] = int(first_row["tp_size"])
+                if pd.notna(first_row.get("dp_size")):
+                    config["dp_size"] = int(first_row["dp_size"])
+                if pd.notna(first_row.get("ep_size")):
+                    config["ep_size"] = int(first_row["ep_size"])
+
+            # Separate batch and memory metrics
+            batch_df = group_df[group_df["metric_type"] == "batch"]
+            memory_df = group_df[group_df["metric_type"] == "memory"]
+
+            # Convert batch metrics to dicts
+            prefill_batches = []
+            if not batch_df.empty:
+                batch_records = batch_df.to_dict("records")
+                for row in batch_records:
+                    batch = {
+                        "timestamp": row["timestamp"],
+                        "dp": int(row["dp"]) if pd.notna(row["dp"]) else 0,
+                        "tp": int(row["tp"]) if pd.notna(row["tp"]) else 0,
+                        "ep": int(row["ep"]) if pd.notna(row["ep"]) else 0,
+                        "type": row["batch_type"],
+                    }
+                    # Add optional fields
+                    for field in [
+                        "new_seq", "new_token", "cached_token", "token_usage",
+                        "running_req", "queue_req", "prealloc_req", "inflight_req",
+                        "transfer_req", "preallocated_usage", "num_tokens",
+                        "input_throughput", "gen_throughput",
+                        "accept_len", "accept_rate", "retracted_req",
+                    ]:
+                        if pd.notna(row.get(field)):
+                            batch[field] = row[field]
+                    prefill_batches.append(batch)
+
+            # Convert memory metrics to dicts
+            memory_snapshots = []
+            if not memory_df.empty:
+                memory_records = memory_df.to_dict("records")
+                for row in memory_records:
+                    mem = {
+                        "timestamp": row["timestamp"],
+                        "dp": int(row["dp"]) if pd.notna(row["dp"]) else 0,
+                        "tp": int(row["tp"]) if pd.notna(row["tp"]) else 0,
+                        "ep": int(row["ep"]) if pd.notna(row["ep"]) else 0,
+                        "type": "memory",
+                    }
+                    for field in ["avail_mem_gb", "mem_usage_gb", "kv_cache_gb", "kv_tokens"]:
+                        if pd.notna(row.get(field)):
+                            mem[field] = row[field]
+                    memory_snapshots.append(mem)
+
+            # Create node dict
+            node = {
+                "node_info": node_info,
+                "prefill_batches": prefill_batches,
+                "memory_snapshots": memory_snapshots,
+                "config": config,
+            }
+            nodes.append(node)
+
+        return nodes
+
     def _serialize_node_metrics(self, nodes: list) -> pd.DataFrame:
         """Serialize NodeMetrics objects to a DataFrame for caching.
 
@@ -306,6 +399,9 @@ class NodeAnalyzer:
                     "num_tokens": batch.num_tokens,
                     "input_throughput": batch.input_throughput,
                     "gen_throughput": batch.gen_throughput,
+                    "accept_len": batch.accept_len,
+                    "accept_rate": batch.accept_rate,
+                    "retracted_req": batch.retracted_req,
                 }
                 rows.append(row)
 
@@ -406,6 +502,9 @@ class NodeAnalyzer:
                             row.get("input_throughput") if pd.notna(row.get("input_throughput")) else None
                         ),
                         gen_throughput=(row.get("gen_throughput") if pd.notna(row.get("gen_throughput")) else None),
+                        accept_len=(row.get("accept_len") if pd.notna(row.get("accept_len")) else None),
+                        accept_rate=(row.get("accept_rate") if pd.notna(row.get("accept_rate")) else None),
+                        retracted_req=(int(row["retracted_req"]) if pd.notna(row.get("retracted_req")) else None),
                     )
                     batches.append(batch)
 
@@ -517,8 +616,9 @@ class NodeAnalyzer:
 
         Example line:
         [2025-11-04 05:32:32 DP31 TP31 EP31] Decode batch, #running-req: 7, #token: 7040,
-        token usage: 0.00, pre-allocated usage: 0.00, #prealloc-req: 0, #transfer-req: 0,
-        #retracted-req: 0, cuda graph: True, gen throughput (token/s): 6.73, #queue-req: 0,
+        token usage: 0.00, accept len: 2.81, accept rate: 0.94, pre-allocated usage: 0.00,
+        #prealloc-req: 0, #transfer-req: 0, #retracted-req: 0, cuda graph: True,
+        gen throughput (token/s): 6.73, #queue-req: 0,
         """
         dp, tp, ep, timestamp = self._parse_dp_tp_ep_tag(line)
         if dp is None or "Decode batch" not in line:
@@ -534,8 +634,11 @@ class NodeAnalyzer:
             "preallocated_usage": r"pre-allocated usage:\s*([\d.]+)",
             "prealloc_req": r"#prealloc-req:\s*(\d+)",
             "transfer_req": r"#transfer-req:\s*(\d+)",
+            "retracted_req": r"#retracted-req:\s*(\d+)",
             "queue_req": r"#queue-req:\s*(\d+)",
             "gen_throughput": r"gen throughput \(token/s\):\s*([\d.]+)",
+            "accept_len": r"accept len:\s*([\d.]+)",
+            "accept_rate": r"accept rate:\s*([\d.]+)",
         }
 
         for key, pattern in patterns.items():
@@ -606,6 +709,159 @@ class NodeAnalyzer:
                 "worker_id": match.group(3),
             }
         return None
+
+
+def compute_worker_aggregate_stats(run_path: str) -> dict:
+    """Compute aggregate statistics from all prefill and decode worker logs.
+
+    Args:
+        run_path: Path to the run directory containing worker log files
+
+    Returns:
+        Dict with 'prefill' and 'decode' keys, each containing averaged metrics
+    """
+    import numpy as np
+
+    analyzer = NodeAnalyzer()
+    nodes = analyzer.parse_run_logs(run_path)
+
+    if not nodes:
+        return {"prefill": {}, "decode": {}}
+
+    # Separate prefill and decode nodes
+    prefill_nodes = [n for n in nodes if n.is_prefill]
+    decode_nodes = [n for n in nodes if n.is_decode]
+
+    def aggregate_prefill_metrics(nodes_list) -> dict:
+        """Aggregate prefill metrics from all nodes."""
+        if not nodes_list:
+            return {}
+
+        # Collect all prefill batches
+        all_batches = []
+        for node in nodes_list:
+            for batch in node.batches:
+                if batch.batch_type == "prefill":
+                    all_batches.append(batch)
+
+        if not all_batches:
+            return {}
+
+        # Calculate averages
+        metrics = {
+            "new_seq": [],
+            "new_token": [],
+            "cached_token": [],
+            "token_usage": [],
+            "running_req": [],
+            "queue_req": [],
+            "prealloc_req": [],
+            "inflight_req": [],
+            "input_throughput": [],
+        }
+
+        for batch in all_batches:
+            if batch.new_seq is not None:
+                metrics["new_seq"].append(batch.new_seq)
+            if batch.new_token is not None:
+                metrics["new_token"].append(batch.new_token)
+            if batch.cached_token is not None:
+                metrics["cached_token"].append(batch.cached_token)
+            if batch.token_usage is not None:
+                metrics["token_usage"].append(batch.token_usage)
+            if batch.running_req is not None:
+                metrics["running_req"].append(batch.running_req)
+            if batch.queue_req is not None:
+                metrics["queue_req"].append(batch.queue_req)
+            if batch.prealloc_req is not None:
+                metrics["prealloc_req"].append(batch.prealloc_req)
+            if batch.inflight_req is not None:
+                metrics["inflight_req"].append(batch.inflight_req)
+            if batch.input_throughput is not None:
+                metrics["input_throughput"].append(batch.input_throughput)
+
+        # Compute averages
+        result = {
+            "num_workers": len(nodes_list),
+            "num_batches": len(all_batches),
+        }
+        for key, values in metrics.items():
+            if values:
+                result[f"avg_{key}"] = float(np.mean(values))
+                result[f"sum_{key}"] = float(np.sum(values)) if key == "input_throughput" else None
+
+        return result
+
+    def aggregate_decode_metrics(nodes_list) -> dict:
+        """Aggregate decode metrics from all nodes."""
+        if not nodes_list:
+            return {}
+
+        # Collect all decode batches
+        all_batches = []
+        for node in nodes_list:
+            for batch in node.batches:
+                if batch.batch_type == "decode":
+                    all_batches.append(batch)
+
+        if not all_batches:
+            return {}
+
+        # Calculate averages
+        metrics = {
+            "running_req": [],
+            "num_tokens": [],
+            "token_usage": [],
+            "preallocated_usage": [],
+            "prealloc_req": [],
+            "transfer_req": [],
+            "retracted_req": [],
+            "queue_req": [],
+            "gen_throughput": [],
+            "accept_len": [],
+            "accept_rate": [],
+        }
+
+        for batch in all_batches:
+            if batch.running_req is not None:
+                metrics["running_req"].append(batch.running_req)
+            if batch.num_tokens is not None:
+                metrics["num_tokens"].append(batch.num_tokens)
+            if batch.token_usage is not None:
+                metrics["token_usage"].append(batch.token_usage)
+            if batch.preallocated_usage is not None:
+                metrics["preallocated_usage"].append(batch.preallocated_usage)
+            if batch.prealloc_req is not None:
+                metrics["prealloc_req"].append(batch.prealloc_req)
+            if batch.transfer_req is not None:
+                metrics["transfer_req"].append(batch.transfer_req)
+            if batch.retracted_req is not None:
+                metrics["retracted_req"].append(batch.retracted_req)
+            if batch.queue_req is not None:
+                metrics["queue_req"].append(batch.queue_req)
+            if batch.gen_throughput is not None:
+                metrics["gen_throughput"].append(batch.gen_throughput)
+            if batch.accept_len is not None:
+                metrics["accept_len"].append(batch.accept_len)
+            if batch.accept_rate is not None:
+                metrics["accept_rate"].append(batch.accept_rate)
+
+        # Compute averages
+        result = {
+            "num_workers": len(nodes_list),
+            "num_batches": len(all_batches),
+        }
+        for key, values in metrics.items():
+            if values:
+                result[f"avg_{key}"] = float(np.mean(values))
+                result[f"sum_{key}"] = float(np.sum(values)) if key == "gen_throughput" else None
+
+        return result
+
+    return {
+        "prefill": aggregate_prefill_metrics(prefill_nodes),
+        "decode": aggregate_decode_metrics(decode_nodes),
+    }
 
 
 # Standalone helper function for visualizations
