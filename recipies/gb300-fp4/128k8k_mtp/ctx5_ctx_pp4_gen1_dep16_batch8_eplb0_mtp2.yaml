@@ -133,6 +133,7 @@ backend:
       model-path: /model/
       moe-dense-tp-size: 1
       moe-runner-backend: flashinfer_trtllm
+      # moe-runner-backend: flashinfer_cutlass
       pipeline-parallel-size: 4
       quantization: modelopt_fp4
       scheduler-recv-interval: 1

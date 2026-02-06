@@ -86,7 +86,7 @@ backend:
       enable-symm-mem: true
       expert-parallel-size: 16
       kv-cache-dtype: fp8_e4m3
-      max-running-requests: 256
+      max-running-requests: 64
       mem-fraction-static: 0.75  # Reduced for MTP draft model memory
       model-path: /model/
       moe-dense-tp-size: 1
