@@ -24,6 +24,7 @@ Excel sheets:
 
 import argparse
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -37,6 +38,67 @@ from analysis.srtlog.models import BenchmarkRun
 
 # Default Excel filename (fixed, no timestamp for incremental updates)
 DEFAULT_EXCEL_FILE = "benchmark_summary.xlsx"
+
+
+def detect_mtp_info(run: BenchmarkRun) -> tuple[bool, int]:
+    """Detect MTP (Multi-Token Prediction / speculative decoding) configuration.
+
+    Detection methods (in priority order):
+    1. Parse _mtpX from directory name (X > 0 means enabled)
+    2. Parse _mtpX from config.yaml 'name' field
+    3. Check config.yaml decode section for speculative-num-steps
+
+    Args:
+        run: BenchmarkRun instance
+
+    Returns:
+        Tuple of (mtp_enabled: bool, mtp_num_steps: int)
+        Returns (False, 0) if MTP is not detected
+    """
+    run_path = run.metadata.path
+    job_name = os.path.basename(run_path)
+
+    # Method 1: Parse _mtpX from directory name
+    match = re.search(r"[_-]mtp(\d+)", job_name, re.IGNORECASE)
+    if match:
+        num_steps = int(match.group(1))
+        return (num_steps > 0, num_steps)
+
+    # Method 2 & 3: Check config.yaml
+    config_path = os.path.join(run_path, "config.yaml")
+    if os.path.exists(config_path):
+        try:
+            import yaml
+
+            with open(config_path) as f:
+                config = yaml.safe_load(f)
+
+            if config:
+                # Method 2: Parse _mtpX from config name field
+                config_name = config.get("name", "")
+                if config_name:
+                    match = re.search(r"[_-]mtp(\d+)", config_name, re.IGNORECASE)
+                    if match:
+                        num_steps = int(match.group(1))
+                        return (num_steps > 0, num_steps)
+
+                # Method 3: Check decode sglang_config for speculative settings
+                decode_config = (
+                    config.get("backend", {})
+                    .get("sglang_config", {})
+                    .get("decode", {})
+                )
+                if decode_config:
+                    spec_steps = decode_config.get("speculative-num-steps", 0)
+                    spec_algo = decode_config.get("speculative-algorithm", "")
+                    if spec_steps and int(spec_steps) > 0:
+                        return (True, int(spec_steps))
+                    if spec_algo:
+                        return (True, int(spec_steps) if spec_steps else 0)
+        except Exception:
+            pass
+
+    return (False, 0)
 
 
 def get_existing_job_ids(excel_file: str) -> set[str]:
@@ -100,6 +162,9 @@ def create_summary_df(runs: list[BenchmarkRun]) -> pd.DataFrame:
         # Extract job name from directory path
         job_name = os.path.basename(run.metadata.path)
         
+        # Detect MTP configuration
+        mtp_enabled, mtp_steps = detect_mtp_info(run)
+        
         # Basic config
         row = {
             "Job ID": run.job_id,
@@ -115,6 +180,8 @@ def create_summary_df(runs: list[BenchmarkRun]) -> pd.DataFrame:
             "Decode Workers": run.metadata.decode_workers,
             "Agg Workers": run.metadata.agg_workers,
             "Mode": run.metadata.mode,
+            "MTP Enabled": mtp_enabled,
+            "MTP Steps": mtp_steps,
             "ISL": run.profiler.isl,
             "OSL": run.profiler.osl,
             "Profiler": run.profiler.profiler_type,
@@ -139,6 +206,7 @@ def create_all_results_df(runs: list[BenchmarkRun]) -> pd.DataFrame:
     for run in runs:
         job_name = os.path.basename(run.metadata.path)
         total_gpus = run.total_gpus
+        mtp_enabled, mtp_steps = detect_mtp_info(run)
         
         for i in range(len(run.profiler.output_tps)):
             tps = run.profiler.output_tps[i]
@@ -157,6 +225,8 @@ def create_all_results_df(runs: list[BenchmarkRun]) -> pd.DataFrame:
                 "Job Name": job_name,
                 "Run Date": run.metadata.run_date,
                 "Topology": run.metadata.topology_label,
+                "MTP Enabled": mtp_enabled,
+                "MTP Steps": mtp_steps,
                 "ISL": run.profiler.isl,
                 "OSL": run.profiler.osl,
                 "GPU Type": run.metadata.gpu_type,
@@ -190,6 +260,7 @@ def create_config_details_df(runs: list[BenchmarkRun]) -> pd.DataFrame:
     
     for run in runs:
         job_name = os.path.basename(run.metadata.path)
+        mtp_enabled, mtp_steps = detect_mtp_info(run)
         
         row = {
             "Job ID": run.job_id,
@@ -205,6 +276,8 @@ def create_config_details_df(runs: list[BenchmarkRun]) -> pd.DataFrame:
             "Agg Nodes": run.metadata.agg_nodes,
             "Agg Workers": run.metadata.agg_workers,
             "Total GPUs": run.total_gpus,
+            "MTP Enabled": mtp_enabled,
+            "MTP Steps": mtp_steps,
             "Container": run.metadata.container,
             "Model Dir": run.metadata.model_dir,
             "Profiler Type": run.profiler.profiler_type,
