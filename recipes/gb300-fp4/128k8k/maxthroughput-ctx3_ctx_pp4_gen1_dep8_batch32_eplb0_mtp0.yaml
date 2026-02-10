@@ -39,9 +39,7 @@ backend:
     SGLANG_MOE_NVFP4_DISPATCH: "1"
     SGLANG_NVFP4_CKPT_FP8_NEXTN_MOE: "1"
     SGLANG_FLASHINFER_FP4_GEMM_BACKEND: "cutlass"
-    FLASHINFER_DISABLE_VERSION_CHECK: "1"
-    FLASHINFER_WORKSPACE_BASE: /tmp/flashinfer-cache
-    SGLANG_DG_CACHE_DIR: /configs/deepgemm-cache
+    FLASHINFER_DISABLE_VERSION_CHECK: "1"  # 3xfp4 & flashinfer_cutedsl cu130 support
 
   prefill_environment:
     TORCH_DISTRIBUTED_DEFAULT_TIMEOUT: "7200"
@@ -61,9 +59,7 @@ backend:
     SGLANG_USE_MESSAGE_QUEUE_BROADCASTER: "0"
     SGLANG_DISABLE_TP_MEMORY_INBALANCE_CHECK: "1"
     SGLANG_FLASHINFER_FP4_GEMM_BACKEND: "cutlass"
-    FLASHINFER_DISABLE_VERSION_CHECK: "1"
-    FLASHINFER_WORKSPACE_BASE: /tmp/flashinfer-cache
-    SGLANG_DG_CACHE_DIR: /configs/deepgemm-cache
+    FLASHINFER_DISABLE_VERSION_CHECK: "1"  # 3xfp4 & flashinfer_cutedsl cu130 support
 
   sglang_config:
     decode:
@@ -83,7 +79,6 @@ backend:
       kv-cache-dtype: fp8_e4m3
       max-running-requests: 256
       mem-fraction-static: 0.80
-      model-path: /model/
       moe-dense-tp-size: 1
       moe-runner-backend: flashinfer_cutedsl
       moe-a2a-backend: deepep
@@ -114,10 +109,8 @@ backend:
       expert-parallel-size: 1
       kv-cache-dtype: fp8_e4m3
       load-balance-method: round_robin
-      # max-total-tokens: 544000
       max-running-requests: 32
       mem-fraction-static: 0.72
-      model-path: /model/
       moe-dense-tp-size: 1
       moe-runner-backend: flashinfer_trtllm
       pipeline-parallel-size: 4
@@ -129,12 +122,9 @@ backend:
       trust-remote-code: true
       watchdog-timeout: 1000000
 
-extra_mount:
-  - "/home/yangminl/sglang:/sgl-workspace/sglang"
-
 benchmark:
-  concurrencies: "512"
+  type: "sa-bench"
   isl: 128000
   osl: 8000
+  concurrencies: "512"
   req_rate: "inf"
-  type: "sa-bench"
