@@ -44,6 +44,8 @@ backend:
     SGLANG_ENABLE_SPEC_V2: "1"
     SGLANG_NCCL_ALL_GATHER_IN_OVERLAP_SCHEDULER_SYNC_BATCH: "1"
     FLASHINFER_DISABLE_VERSION_CHECK: "1"  # 3xfp4 & flashinfer_cutedsl cu130 support
+    FLASHINFER_WORKSPACE_BASE: /tmp/flashinfer-cache
+    SGLANG_DG_CACHE_DIR: /configs/deepgemm-cache
 
   prefill_environment:
     TORCH_DISTRIBUTED_DEFAULT_TIMEOUT: "7200"
@@ -64,6 +66,8 @@ backend:
     SGLANG_DISABLE_TP_MEMORY_INBALANCE_CHECK: "1"
     SGLANG_FLASHINFER_FP4_GEMM_BACKEND: "cutlass"
     FLASHINFER_DISABLE_VERSION_CHECK: "1"  # 3xfp4 & flashinfer_cutedsl cu130 support
+    FLASHINFER_WORKSPACE_BASE: /tmp/flashinfer-cache
+    SGLANG_DG_CACHE_DIR: /configs/deepgemm-cache
 
   sglang_config:
     decode:

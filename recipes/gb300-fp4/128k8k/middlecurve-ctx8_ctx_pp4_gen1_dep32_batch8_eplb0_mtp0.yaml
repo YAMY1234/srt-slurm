@@ -40,6 +40,8 @@ backend:
     SGLANG_NVFP4_CKPT_FP8_NEXTN_MOE: "1"
     SGLANG_FLASHINFER_FP4_GEMM_BACKEND: "cutlass"
     FLASHINFER_DISABLE_VERSION_CHECK: "1"  # 3xfp4 & flashinfer_cutedsl cu130 support
+    FLASHINFER_WORKSPACE_BASE: /tmp/flashinfer-cache
+    SGLANG_DG_CACHE_DIR: /configs/deepgemm-cache
 
   prefill_environment:
     TORCH_DISTRIBUTED_DEFAULT_TIMEOUT: "7200"
@@ -60,6 +62,8 @@ backend:
     SGLANG_DISABLE_TP_MEMORY_INBALANCE_CHECK: "1"
     SGLANG_FLASHINFER_FP4_GEMM_BACKEND: "cutlass"
     FLASHINFER_DISABLE_VERSION_CHECK: "1"  # 3xfp4 & flashinfer_cutedsl cu130 support
+    FLASHINFER_WORKSPACE_BASE: /tmp/flashinfer-cache
+    SGLANG_DG_CACHE_DIR: /configs/deepgemm-cache
 
   sglang_config:
     decode:
