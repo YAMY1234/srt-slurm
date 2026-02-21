@@ -1,7 +1,7 @@
-# Config: ctx8_ctx_pp4_gen1_dep32_batch8_eplb0_mtp0
+# Config: ctx8_pp4_gen1_dep32_batch8_eplb0_mtp0
 # max global bs: 256, concurrency: 512
 
-name: "gb300-fp4-128k8k-ctx8_ctx_pp4_gen1_dep32_batch8_eplb0_mtp0"
+name: "gb300-fp4-128k8k-ctx8_pp4_gen1_dep32_batch8_eplb0_mtp0"
 
 model:
   path: "dsfp4"
@@ -32,7 +32,7 @@ backend:
     MC_FORCE_MNNVL: "1"
     NCCL_MNNVL_ENABLE: "1"
     NCCL_CUMEM_ENABLE: "1"
-    SGLANG_MOONCAKE_CUSTOM_MEM_POOL: "True"
+    SGLANG_MOONCAKE_CUSTOM_MEM_POOL: "true"
     SGLANG_USE_MESSAGE_QUEUE_BROADCASTER: "0"
     SGLANG_DISABLE_TP_MEMORY_INBALANCE_CHECK: "1"
     SGLANG_DEEPEP_NUM_MAX_DISPATCH_TOKENS_PER_RANK: "1024"
@@ -57,7 +57,7 @@ backend:
     MC_FORCE_MNNVL: "1"
     NCCL_MNNVL_ENABLE: "1"
     NCCL_CUMEM_ENABLE: "1"
-    SGLANG_MOONCAKE_CUSTOM_MEM_POOL: "True"
+    SGLANG_MOONCAKE_CUSTOM_MEM_POOL: "true"
     SGLANG_USE_MESSAGE_QUEUE_BROADCASTER: "0"
     SGLANG_DISABLE_TP_MEMORY_INBALANCE_CHECK: "1"
     SGLANG_FLASHINFER_FP4_GEMM_BACKEND: "cutlass"
@@ -87,10 +87,6 @@ backend:
       moe-runner-backend: flashinfer_cutedsl
       moe-a2a-backend: deepep
       deepep-mode: low_latency
-      ep-dispatch-algorithm: static
-      ep-num-redundant-experts: 32
-      disable-shared-experts-fusion: true
-      eplb-algorithm: deepseek
       pipeline-parallel-size: 1
       prefill-round-robin-balance: true
       quantization: modelopt_fp4

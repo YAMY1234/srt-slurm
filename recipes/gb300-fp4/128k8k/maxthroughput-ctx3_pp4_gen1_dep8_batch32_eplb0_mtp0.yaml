@@ -1,7 +1,7 @@
-# Config: ctx5_ctx_pp4_gen1_dep16_batch16_eplb0_mtp0
+# Config: ctx3_pp4_gen1_dep8_batch32_eplb0_mtp0
 # max global bs: 256, concurrency: 512
 
-name: "gb300-fp4-128k8k-ctx5_ctx_pp4_gen1_dep16_batch16_eplb0_mtp0"
+name: "gb300-fp4-128k8k-ctx3_pp4_gen1_dep8_batch32_eplb0_mtp0"
 
 model:
   path: "dsfp4"
@@ -10,11 +10,11 @@ model:
 
 resources:
   gpu_type: "gb300"
-  decode_nodes: 4
+  decode_nodes: 2
   decode_workers: 1
   gpus_per_node: 4
-  prefill_nodes: 5
-  prefill_workers: 5
+  prefill_nodes: 3
+  prefill_workers: 3
 
 backend:
 
@@ -32,7 +32,7 @@ backend:
     MC_FORCE_MNNVL: "1"
     NCCL_MNNVL_ENABLE: "1"
     NCCL_CUMEM_ENABLE: "1"
-    SGLANG_MOONCAKE_CUSTOM_MEM_POOL: "True"
+    SGLANG_MOONCAKE_CUSTOM_MEM_POOL: "true"
     SGLANG_USE_MESSAGE_QUEUE_BROADCASTER: "0"
     SGLANG_DISABLE_TP_MEMORY_INBALANCE_CHECK: "1"
     SGLANG_DEEPEP_NUM_MAX_DISPATCH_TOKENS_PER_RANK: "1024"
@@ -57,7 +57,7 @@ backend:
     MC_FORCE_MNNVL: "1"
     NCCL_MNNVL_ENABLE: "1"
     NCCL_CUMEM_ENABLE: "1"
-    SGLANG_MOONCAKE_CUSTOM_MEM_POOL: "True"
+    SGLANG_MOONCAKE_CUSTOM_MEM_POOL: "true"
     SGLANG_USE_MESSAGE_QUEUE_BROADCASTER: "0"
     SGLANG_DISABLE_TP_MEMORY_INBALANCE_CHECK: "1"
     SGLANG_FLASHINFER_FP4_GEMM_BACKEND: "cutlass"
@@ -70,8 +70,8 @@ backend:
       attention-backend: trtllm_mla
       chunked-prefill-size: -1
       context-length: 136001
-      cuda-graph-max-bs: 128
-      data-parallel-size: 16
+      cuda-graph-max-bs: 256
+      data-parallel-size: 8
       disable-radix-cache: true
       disaggregation-bootstrap-port: 30001
       disaggregation-mode: decode
@@ -79,7 +79,7 @@ backend:
       enable-dp-attention: true
       enable-dp-lm-head: true
       enable-symm-mem: true
-      expert-parallel-size: 16
+      expert-parallel-size: 8
       kv-cache-dtype: fp8_e4m3
       max-running-requests: 256
       mem-fraction-static: 0.80
@@ -87,17 +87,13 @@ backend:
       moe-runner-backend: flashinfer_cutedsl
       moe-a2a-backend: deepep
       deepep-mode: low_latency
-      ep-dispatch-algorithm: static
-      ep-num-redundant-experts: 32
-      disable-shared-experts-fusion: true
-      eplb-algorithm: deepseek
       pipeline-parallel-size: 1
       prefill-round-robin-balance: true
       quantization: modelopt_fp4
       scheduler-recv-interval: 1
       served-model-name: deepseek-ai/DeepSeek-R1
       stream-interval: 10
-      tensor-parallel-size: 16
+      tensor-parallel-size: 8
       trust-remote-code: true
       watchdog-timeout: 1000000
     prefill:
