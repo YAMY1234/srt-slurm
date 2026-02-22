@@ -1,7 +1,7 @@
-# Config: ctx1_pp4_gen1_tep4_batch1_eplb0_mtp0
+# Config: ctx1_pp4_gen1_tp4_batch1_eplb0_mtp0
 # chunked prefill size: 32000 (dynamic chunking enabled)
 
-name: "gb300-fp4-128k8k-ctx1_pp4_gen1_tep4_batch1_eplb0_mtp0"
+name: "gb300-fp4-128k8k-ctx1_pp4_gen1_tp4_batch1_eplb0_mtp0"
 
 model:
   path: "dsfp4"
