@@ -18,6 +18,7 @@ IS_DISAGGREGATED=${8:-false}
 TOTAL_GPUS=${9:-0}
 PREFILL_GPUS=${10:-0}
 DECODE_GPUS=${11:-0}
+RANDOM_RANGE_RATIO=${12:-0.8}
 
 # Parse endpoint into host:port
 HOST=$(echo "$ENDPOINT" | sed 's|http://||' | cut -d: -f1)
@@ -60,7 +61,7 @@ for concurrency in "${CONCURRENCY_LIST[@]}"; do
         --num-prompts "$num_warmup_prompts" \
         --random-input-len "$ISL" \
         --random-output-len "$OSL" \
-        --random-range-ratio 0.8 \
+        --random-range-ratio "${RANDOM_RANGE_RATIO}" \
         --ignore-eos \
         --request-rate 250 \
         --percentile-metrics ttft,tpot,itl,e2el \
@@ -87,7 +88,7 @@ for concurrency in "${CONCURRENCY_LIST[@]}"; do
         --num-prompts "$num_prompts" \
         --random-input-len "$ISL" \
         --random-output-len "$OSL" \
-        --random-range-ratio 0.8 \
+        --random-range-ratio "${RANDOM_RANGE_RATIO}" \
         --ignore-eos \
         --request-rate "${REQ_RATE}" \
         --percentile-metrics ttft,tpot,itl,e2el \
