@@ -52,7 +52,7 @@ class RunMetadata:
         if json_data.get("version") == "2.0":
             resources = json_data.get("resources", {})
             model = json_data.get("model", {})
-            agg_workers = resources.get("agg_workers", 0)
+            agg_workers = resources.get("agg_workers") or 0
 
             # Determine mode based on agg_workers
             if agg_workers > 0:
@@ -60,24 +60,29 @@ class RunMetadata:
             else:
                 mode = "disaggregated"
 
+            # agg_nodes: fall back to agg_workers if not specified
+            agg_nodes = (resources.get("agg_nodes") or 0) if agg_workers > 0 else 0
+            if agg_workers > 0 and agg_nodes == 0:
+                agg_nodes = agg_workers
+
             return cls(
                 job_id=json_data.get("job_id", ""),
                 path=run_path,
                 run_date=json_data.get("generated_at", ""),
                 container=model.get("container", ""),
-                prefill_nodes=resources.get("prefill_nodes", 0),
-                decode_nodes=resources.get("decode_nodes", 0),
-                prefill_workers=resources.get("prefill_workers", 0),
-                decode_workers=resources.get("decode_workers", 0),
+                prefill_nodes=resources.get("prefill_nodes") or 0,
+                decode_nodes=resources.get("decode_nodes") or 0,
+                prefill_workers=resources.get("prefill_workers") or 0,
+                decode_workers=resources.get("decode_workers") or 0,
                 mode=mode,
                 job_name=json_data.get("job_name", ""),
                 partition="",
                 model_dir=model.get("path", ""),
-                gpus_per_node=resources.get("gpus_per_node", 0),
+                gpus_per_node=resources.get("gpus_per_node") or 0,
                 gpu_type=resources.get("gpu_type", ""),
                 enable_multiple_frontends=False,
                 num_additional_frontends=0,
-                agg_nodes=resources.get("agg_nodes", 0) if agg_workers > 0 else 0,
+                agg_nodes=agg_nodes,
                 agg_workers=agg_workers,
             )
 
