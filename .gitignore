@@ -57,4 +57,5 @@ outputs/*
 .coverage
 
 outputs/
+configs/dg-*
 configs/flashinfer-cache/

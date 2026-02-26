@@ -1,17 +1,25 @@
 #!/bin/bash
 #SBATCH --job-name={{ job_name }}
 #SBATCH --nodes={{ total_nodes }}
+{% if backend_type == "trtllm" %}
+#SBATCH --ntasks={{ gpus_per_node * total_nodes }}
+#SBATCH --ntasks-per-node={{ gpus_per_node }}
+{% else %}
 #SBATCH --ntasks={{ total_nodes }}
 #SBATCH --ntasks-per-node=1
+{% endif %}
 {% if use_gpus_per_node_directive %}
 #SBATCH --gpus-per-node={{ gpus_per_node }}
 {% endif %}
 {% if use_segment_sbatch_directive %}
 #SBATCH --segment={{ total_nodes }}
 {% endif %}
+{% if use_exclusive_sbatch_directive %}
+#SBATCH --exclusive
+{% endif %}
 #SBATCH --account={{ account }}
 #SBATCH --time={{ time_limit }}
-#SBATCH --output={{ srtctl_source }}/outputs/%j-{{ recipe_name }}/logs/sweep_%j.log
+#SBATCH --output={{ output_base }}/%j-{{ recipe_name }}/logs/sweep_%j.log
 #SBATCH --partition={{ partition }}
 {% for key, value in sbatch_directives.items() %}
 {% if value %}
@@ -30,9 +38,10 @@
 
 set -e
 
-# Setup directories - use project root for consistent output location
+# Setup directories
 SRTCTL_SOURCE="{{ srtctl_source }}"
-OUTPUT_DIR="${SRTCTL_SOURCE}/outputs/${SLURM_JOB_ID}-{{ recipe_name }}"
+OUTPUT_BASE="{{ output_base }}"
+OUTPUT_DIR="${OUTPUT_BASE}/${SLURM_JOB_ID}-{{ recipe_name }}"
 LOG_DIR="${OUTPUT_DIR}/logs"
 mkdir -p "${LOG_DIR}"
 
@@ -60,20 +69,20 @@ cp "{{ config_path }}" "${OUTPUT_DIR}/config.yaml"
 HEAD_NODE=$(scontrol show hostnames ${SLURM_NODELIST} | head -n1)
 echo "Head node: ${HEAD_NODE}"
 
-# Install srtctl using container's pip (host may not have pip)
-SRTCTL_INSTALL_DIR="${OUTPUT_DIR}/.srtctl_install"
-mkdir -p "${SRTCTL_INSTALL_DIR}"
+# Set source directory for container mounts (/configs)
 export SRTCTL_SOURCE_DIR="${SRTCTL_SOURCE}"
 
 echo ""
-echo "Installing srtctl dependencies via container..."
-srun --nodes=1 --ntasks=1 --nodelist="${HEAD_NODE}" \
-    --container-image="{{ container_image }}" \
-    --container-mounts="${SRTCTL_SOURCE}:/srtctl-src,${SRTCTL_INSTALL_DIR}:/srtctl-install" \
-    pip install --quiet --target=/srtctl-install /srtctl-src
+echo "Preparing srtctl environment..."
 
-export PYTHONPATH="${SRTCTL_INSTALL_DIR}:${PYTHONPATH}"
-echo "Installed to ${SRTCTL_INSTALL_DIR}"
+# Install uv if not present (single binary, no dependencies)
+if ! command -v uv &> /dev/null; then
+    echo "Installing uv package manager..."
+    curl -LsSf https://astral.sh/uv/install.sh | sh
+    export PATH="$HOME/.local/bin:$PATH"
+fi
+
+echo "Using uv with Python 3.12..."
 
 {% if setup_script %}
 # Custom setup script override from CLI
@@ -87,7 +96,8 @@ echo ""
 # The orchestrator will spawn containerized workers
 # Output goes to SLURM's --output (sweep_%j.log)
 set +e  # Temporarily disable exit-on-error to capture exit code
-python3 -u -m srtctl.cli.do_sweep "{{ config_path }}"
+cd "${SRTCTL_SOURCE}"
+uv run --python 3.12 --no-dev -m srtctl.cli.do_sweep "{{ config_path }}"
 EXIT_CODE=$?
 set -e  # Re-enable exit-on-error
 

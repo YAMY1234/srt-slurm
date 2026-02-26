@@ -15,7 +15,8 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from srtctl.core.health import wait_for_model
-from srtctl.core.slurm import get_hostname_ip, get_port_offset, start_srun_process
+from srtctl.core.slurm import get_hostname_ip, start_srun_process
+from srtctl.core.status import JobStage, JobStatus, StatusReporter
 
 if TYPE_CHECKING:
     from srtctl.benchmarks.base import BenchmarkRunner
@@ -34,6 +35,7 @@ class BenchmarkStageMixin:
         self.config: SrtConfig
         self.runtime: RuntimeContext
         self.endpoints: list[Endpoint]
+        self.backend_processes: list[Process]
     """
 
     # Type hints for mixin dependencies
@@ -43,16 +45,18 @@ class BenchmarkStageMixin:
     @property
     def endpoints(self) -> list["Endpoint"]:
         """Endpoint allocation topology."""
-        ...
+        raise NotImplementedError
 
     @property
     def backend_processes(self) -> list["Process"]:
-        """Physical process topology (provided by WorkerStageMixin / orchestrator)."""
-        ...
+        """Backend worker processes."""
+        raise NotImplementedError
 
-    def run_benchmark(self, registry: "ProcessRegistry", stop_event: threading.Event) -> int:
+    def run_benchmark(
+        self, registry: "ProcessRegistry", stop_event: threading.Event, reporter: StatusReporter | None = None
+    ) -> int:
         """Run the benchmark."""
-        logger.info("Running benchmark")
+        logger.info("Waiting for workers to be ready...")
 
         r = self.config.resources
         num_workers = r.num_prefill + r.num_decode + r.num_agg
@@ -72,8 +76,7 @@ class BenchmarkStageMixin:
             n_decode = r.num_decode
 
         hc = self.config.health_check
-        port_offset = get_port_offset(self.runtime.job_id)
-        public_port = 8000 + port_offset
+        public_port = self.runtime.frontend_port
         if not wait_for_model(
             host=self.runtime.nodes.head,
             port=public_port,
@@ -86,9 +89,13 @@ class BenchmarkStageMixin:
             stop_event=stop_event,
         ):
             logger.error("Server did not become healthy")
+            if reporter:
+                reporter.report(JobStatus.FAILED, JobStage.BENCHMARK, "Workers failed health check")
             return 1
 
-        logger.info("Server is healthy")
+        logger.info("Server is healthy - starting benchmark")
+        if reporter:
+            reporter.report(JobStatus.BENCHMARK, JobStage.BENCHMARK, "Running benchmark")
 
         benchmark_type = self.config.benchmark.type
         if self.config.profiling.enabled:
@@ -148,7 +155,7 @@ class BenchmarkStageMixin:
         """Run the actual benchmark script."""
 
         cmd = runner.build_command(self.config, self.runtime)
-        env_to_set = self._get_benchmark_profiling_env(runner)
+        env_to_set = self._get_benchmark_env(runner)
 
         logger.info("Script: %s", runner.script_path)
         logger.info("Command: %s", shlex.join(cmd))
@@ -221,9 +228,9 @@ class BenchmarkStageMixin:
         for process in self.backend_processes:
             if not process.is_leader:
                 continue
-            leader_ip = get_hostname_ip(process.node)
-            leader_port = process.sys_port if use_sys_port else process.http_port
-            leader_endpoint = f"{leader_ip}:{leader_port}"
+            leader_ip = get_hostname_ip(process.node, self.runtime.network_interface)
+            port = process.sys_port if use_sys_port else process.http_port
+            leader_endpoint = f"{leader_ip}:{port}"
             if process.endpoint_mode == "prefill":
                 prefill_ips.append(leader_ip)
                 prefill_endpoints.append(leader_endpoint)
@@ -253,5 +260,34 @@ class BenchmarkStageMixin:
             env["BENCH_MODEL_NAME"] = self.config.served_model_name
             env["HEAD_NODE"] = self.runtime.nodes.head
             env["HEAD_PORT"] = str(self.runtime.frontend_port)
+
+        return env
+
+    def _get_aiperf_server_metrics_env(self) -> dict[str, str]:
+        """Build server metrics URLs for AIPerf benchmarks.
+
+        Collects metrics endpoints from all backend processes that expose
+        a sys_port (vLLM workers with AIPerf metrics enabled).
+        """
+        urls: list[str] = []
+        for process in self.backend_processes:
+            if process.sys_port > 0:
+                host = get_hostname_ip(process.node, self.runtime.network_interface)
+                urls.append(f"http://{host}:{process.sys_port}/metrics")
+
+        if not urls:
+            return {}
+        return {"AIPERF_SERVER_METRICS_URLS": ",".join(sorted(set(urls)))}
+
+    def _get_benchmark_env(self, runner: "BenchmarkRunner") -> dict[str, str]:
+        """Get environment variables for the benchmark script."""
+        from srtctl.benchmarks.base import AIPerfBenchmarkRunner
+
+        env = self._get_benchmark_profiling_env(runner)
+        env["SRTCTL_FRONTEND_TYPE"] = self.config.frontend.type
+
+        # Add AIPerf metrics URLs for AIPerf-driven benchmarks
+        if isinstance(runner, AIPerfBenchmarkRunner):
+            env.update(self._get_aiperf_server_metrics_env())
 
         return env

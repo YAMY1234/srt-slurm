@@ -152,16 +152,19 @@ class FrontendStageMixin:
         cmd = [
             "bash",
             "-c",
-            f"for i in 1 2 3; do apt-get update -qq && apt-get install -y -qq nginx && break || sleep 5; done && nginx -c {container_config_path} -g 'daemon off;'",
+            f"nginx -c {container_config_path} -g 'daemon off;'",
         ]
 
         proc = start_srun_process(
             command=cmd,
             nodelist=[topology.nginx_node],
             output=str(nginx_log),
-            container_image=str(self.runtime.container_image),
+            container_image=self.config.frontend.nginx_container,
             container_mounts=self.runtime.container_mounts,
             use_bash_wrapper=False,  # Already wrapped in bash -c
+            srun_options={
+                "container-remap-root": "",
+            },
         )
 
         return ManagedProcess(

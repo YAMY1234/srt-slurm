@@ -23,6 +23,7 @@ from marshmallow import Schema
 from marshmallow_dataclass import dataclass
 
 if TYPE_CHECKING:
+    from srtctl.backends.base import SrunConfig
     from srtctl.core.runtime import RuntimeContext
     from srtctl.core.topology import Endpoint, NodePortAllocator, Process
 
@@ -87,6 +88,12 @@ class SGLangProtocol:
     # BackendProtocol Implementation
     # =========================================================================
 
+    def get_srun_config(self) -> "SrunConfig":
+        """SGLang uses per-process launching (one srun per node)."""
+        from srtctl.backends.base import SrunConfig
+
+        return SrunConfig(mpi=None, oversubscribe=False, launch_per_endpoint=False)
+
     def get_config_for_mode(self, mode: WorkerMode) -> dict[str, Any]:
         """Get merged config dict for a worker mode."""
         if not self.sglang_config:
@@ -110,10 +117,28 @@ class SGLangProtocol:
             return dict(self.aggregated_environment)
         return {}
 
+    def get_process_environment(self, process: "Process") -> dict[str, str]:
+        """Get process-specific environment variables.
+
+        SGLang handles kv-events via CLI args (--kv-events-config), so no
+        additional process-specific env vars are needed here.
+        """
+        return {}
+
     def is_grpc_mode(self, mode: WorkerMode) -> bool:
         """Check if gRPC mode is enabled for a worker mode."""
         config = self.get_config_for_mode(mode)
         return config.get("grpc-mode", False)
+
+    def get_served_model_name(self, default: str) -> str:
+        """Get served model name from SGLang config, or return default."""
+        if self.sglang_config:
+            for cfg in [self.sglang_config.prefill, self.sglang_config.aggregated, self.sglang_config.decode]:
+                if cfg:
+                    name = cfg.get("served-model-name") or cfg.get("served_model_name")
+                    if name:
+                        return name
+        return default
 
     def get_kv_events_config_for_mode(self, mode: WorkerMode) -> dict[str, str] | None:
         """Get kv-events config for a worker mode.
@@ -131,7 +156,9 @@ class SGLangProtocol:
 
         # Per-mode config dict
         if isinstance(self.kv_events_config, dict):
-            mode_cfg = self.kv_events_config.get(mode)
+            # Normalize mode key: use "aggregated" for aggregated mode
+            mode_cfg = self.kv_events_config.get("aggregated") if mode == "agg" else self.kv_events_config.get(mode)
+
             if mode_cfg is None:
                 return None
             if mode_cfg is True:
@@ -215,25 +242,20 @@ class SGLangProtocol:
         python_module = "sglang.launch_server" if use_sglang else "dynamo.sglang"
 
         # Get served model name from config
-        served_model_name = runtime.model_path.name
-        if self.sglang_config:
-            for cfg in [self.sglang_config.prefill, self.sglang_config.aggregated]:
-                if cfg:
-                    name = cfg.get("served-model-name") or cfg.get("served_model_name")
-                    if name:
-                        served_model_name = name
-                        break
+        served_model_name = self.get_served_model_name(runtime.model_path.name)
 
         # Start with nsys prefix if provided
         cmd: list[str] = list(nsys_prefix) if nsys_prefix else []
 
+        # Use container path /model since model is mounted there (see runtime.py)
+        # Note: runtime.model_path is the HOST path, not usable inside container
         cmd.extend(
             [
                 "python3",
                 "-m",
                 python_module,
                 "--model-path",
-                str(runtime.model_path),
+                "/model",
                 "--served-model-name",
                 served_model_name,
                 "--host",
@@ -241,10 +263,8 @@ class SGLangProtocol:
             ]
         )
 
-        # Only pass --port when using sglang.launch_server (not dynamo.sglang)
-        # dynamo.sglang uses DYN_SYSTEM_PORT env var instead
-        if use_sglang:
-            cmd.extend(["--port", str(process.http_port)])
+        # Always pass --port when using sglang.launch_server or dynamo.sglang
+        cmd.extend(["--port", str(process.http_port)])
 
         # Add disaggregation mode for prefill/decode workers (both dynamo and sglang frontend)
         if mode != "agg":

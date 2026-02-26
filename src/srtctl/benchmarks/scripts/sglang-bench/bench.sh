@@ -53,7 +53,7 @@ for concurrency in "${CONCURRENCY_LIST[@]}"; do
 
     set -x
     python3 -m sglang.bench_serving \
-        --backend sglang \
+        --backend sglang-oai \
         --model "${MODEL_NAME}" \
         --host "${HOST}" --port "${PORT}" \
         --dataset-name random \
@@ -63,7 +63,7 @@ for concurrency in "${CONCURRENCY_LIST[@]}"; do
         --random-output-len "${OSL}" \
         --random-range-ratio 1 \
         --request-rate "${REQ_RATE}" \
-        --warmup-request 0
+        --warmup-requests 0
     set +x
 
     echo "$(date '+%Y-%m-%d %H:%M:%S')"

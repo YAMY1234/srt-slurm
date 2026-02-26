@@ -34,10 +34,11 @@ class NodePortAllocator:
     on an 8-GPU node), they need unique ports. This allocator tracks port
     assignments per node and hands out the next available port.
 
-    Ports allocated:
-        - http_port: HTTP serving port for sglang.launch_server (default: 30000+)
-        - bootstrap_port: P/D coordination port for prefill workers (default: 31000+)
-        - kv_events_port: ZMQ port for kv-events publishing (default: 5550+)
+    Port ranges (non-overlapping):
+        - kv_events_port: 5550+  (global) - ZMQ port for kv-events publishing
+        - nixl_port:      6550+  (global) - NIXL side channel for KV transfers (vLLM)
+        - http_port:      30000+ (per node) - HTTP serving port
+        - bootstrap_port: 31000+ (per node) - P/D coordination port (prefill only)
 
     Port offset based on SLURM_JOB_ID avoids conflicts when multiple jobs
     run on the same nodes: offset = (job_id % 100) * 10
@@ -56,11 +57,13 @@ class NodePortAllocator:
     base_http_port: int = 30000
     base_bootstrap_port: int = 31000
     base_kv_events_port: int = 5550
+    base_nixl_port: int = 6550  # NIXL side channel ports (must not overlap with kv_events)
     port_offset: int = 0  # Offset based on job_id to avoid cross-job conflicts
 
     _http_ports: dict[str, int] = field(default_factory=dict, repr=False)
     _bootstrap_ports: dict[str, int] = field(default_factory=dict, repr=False)
     _next_kv_events_port: int = field(default=0, repr=False)  # Global counter
+    _next_nixl_port: int = field(default=0, repr=False)  # Global counter for NIXL
 
     @classmethod
     def with_job_offset(cls, job_id: str | None = None) -> "NodePortAllocator":
@@ -82,7 +85,7 @@ class NodePortAllocator:
         if node not in self._http_ports:
             self._http_ports[node] = self.base_http_port + self.port_offset
         port = self._http_ports[node]
-        self._http_ports[node] += 1
+        self._http_ports[node] += 1000
         return port
 
     def next_bootstrap_port(self, node: str) -> int:
@@ -99,6 +102,14 @@ class NodePortAllocator:
             self._next_kv_events_port = self.base_kv_events_port + self.port_offset
         port = self._next_kv_events_port
         self._next_kv_events_port += 1
+        return port
+
+    def next_nixl_port(self) -> int:
+        """Get next available NIXL side channel port (globally unique across all nodes)."""
+        if self._next_nixl_port == 0:
+            self._next_nixl_port = self.base_nixl_port
+        port = self._next_nixl_port
+        self._next_nixl_port += 1
         return port
 
 
@@ -159,6 +170,7 @@ class Process:
         http_port: HTTP serving port for this process (avoids conflicts on same node)
         bootstrap_port: P/D coordination port (only for prefill leaders)
         kv_events_port: ZMQ port for kv-events publishing (all worker leaders)
+        nixl_port: NIXL side channel port for KV transfers (vLLM only)
         endpoint_mode: The mode of the parent endpoint
         endpoint_index: The index of the parent endpoint
         node_rank: Rank within the endpoint (0 for leader)
@@ -173,6 +185,7 @@ class Process:
     node_rank: int = 0
     bootstrap_port: int | None = None
     kv_events_port: int | None = None
+    nixl_port: int | None = None
 
     @property
     def is_leader(self) -> bool:
@@ -352,7 +365,15 @@ def allocate_endpoints(
     if num_prefill > 0:
         endpoints.extend(allocate_workers_simple("prefill", num_prefill, gpus_per_prefill))
 
+    # When there's a partial allocation on the current node (gpu_offset > 0) and
+    # there are more nodes available, advance to ensure prefill and decode don't
+    # share a node. This prevents the bug where a multi-node decode worker overlaps
+    # with a partial-node prefill worker.
+    # When there are no more nodes (decode_nodes=0 config), allow sharing.
     if num_decode > 0:
+        if gpu_offset > 0 and (node_idx + 1) < len(available_nodes):
+            node_idx += 1
+            gpu_offset = 0
         endpoints.extend(allocate_workers_simple("decode", num_decode, gpus_per_decode))
 
     if num_agg > 0:
@@ -401,14 +422,18 @@ def endpoints_to_processes(
             port_allocator.next_bootstrap_port(leader_node) if endpoint.mode == "prefill" else None
         )
 
-        # Allocate kv_events port for all worker leaders (globally unique)
-        endpoint_kv_events_port = port_allocator.next_kv_events_port()
-
         for node_rank, node in enumerate(endpoint.nodes):
             is_leader = node_rank == 0
 
             # Only leaders need http_port (for router to connect to)
             http_port = port_allocator.next_http_port(node) if is_leader else 0
+
+            # Allocate kv_events port for each node in the endpoint (globally unique)
+            # Each node publishes KV events independently
+            node_kv_events_port = port_allocator.next_kv_events_port()
+
+            # Allocate NIXL side channel port (globally unique, used by vLLM)
+            node_nixl_port = port_allocator.next_nixl_port()
 
             processes.append(
                 Process(
@@ -420,7 +445,8 @@ def endpoints_to_processes(
                     endpoint_index=endpoint.index,
                     node_rank=node_rank,
                     bootstrap_port=endpoint_bootstrap_port,
-                    kv_events_port=endpoint_kv_events_port if is_leader else None,
+                    kv_events_port=node_kv_events_port,
+                    nixl_port=node_nixl_port,
                 )
             )
             current_sys_port += 1

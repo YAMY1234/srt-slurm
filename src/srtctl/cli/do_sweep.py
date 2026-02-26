@@ -21,7 +21,7 @@ import threading
 from dataclasses import dataclass
 from pathlib import Path
 
-from srtctl.cli.mixins import BenchmarkStageMixin, FrontendStageMixin, WorkerStageMixin
+from srtctl.cli.mixins import BenchmarkStageMixin, FrontendStageMixin, PostProcessStageMixin, WorkerStageMixin
 from srtctl.core.config import load_config
 from srtctl.core.health import wait_for_port
 from srtctl.core.processes import (
@@ -33,6 +33,7 @@ from srtctl.core.processes import (
 from srtctl.core.runtime import RuntimeContext
 from srtctl.core.schema import SrtConfig
 from srtctl.core.slurm import get_port_offset, get_slurm_job_id, start_srun_process
+from srtctl.core.status import JobStage, JobStatus, StatusReporter
 from srtctl.core.topology import Endpoint, NodePortAllocator, Process
 from srtctl.logging_utils import setup_logging
 
@@ -40,7 +41,7 @@ logger = logging.getLogger(__name__)
 
 
 @dataclass
-class SweepOrchestrator(WorkerStageMixin, FrontendStageMixin, BenchmarkStageMixin):
+class SweepOrchestrator(WorkerStageMixin, FrontendStageMixin, BenchmarkStageMixin, PostProcessStageMixin):
     """Main orchestrator for benchmark sweeps.
 
     Usage:
@@ -140,15 +141,16 @@ class SweepOrchestrator(WorkerStageMixin, FrontendStageMixin, BenchmarkStageMixi
             )
             return None
 
-        logger.info("Starting head node infrastructure")
-        logger.info("Head node: %s", self.runtime.nodes.head)
+        infra_node = self.runtime.nodes.infra
+        logger.info("Starting infrastructure services (NATS, etcd)")
+        logger.info("Infra node: %s", infra_node)
 
         setup_script = Path(__file__).parent / "setup_head.py"
         if not setup_script.exists():
             raise RuntimeError(f"setup_head.py not found at {setup_script}")
 
         setup_script_container = Path("/tmp/setup_head.py")
-        infra_log = self.runtime.log_dir / "log.out"
+        infra_log = self.runtime.log_dir / "infra.out"
 
         cmd = [
             "python3",
@@ -161,37 +163,39 @@ class SweepOrchestrator(WorkerStageMixin, FrontendStageMixin, BenchmarkStageMixi
 
         mounts = dict(self.runtime.container_mounts)
         mounts[setup_script] = setup_script_container
+        # Mount host /tmp to container /host-tmp for etcd/nats data on local storage
+        # This ensures etcd WAL writes go to fast local disk, not network storage
+        mounts[Path("/tmp")] = Path("/host-tmp")
 
         proc = start_srun_process(
             command=cmd,
-            nodelist=[self.runtime.nodes.head],
+            nodelist=[infra_node],
             output=str(infra_log),
             container_image=str(self.runtime.container_image),
             container_mounts=mounts,
         )
 
         managed = ManagedProcess(
-            name="head_infrastructure",
+            name="infra_services",
             popen=proc,
             log_file=infra_log,
-            node=self.runtime.nodes.head,
+            node=infra_node,
             critical=True,
         )
 
-        # Calculate port offset based on job_id
         port_offset = get_port_offset(self.runtime.job_id)
         nats_port = 4222 + port_offset
         etcd_port = 2379 + port_offset
-
         logger.info("Port offset for this job: %d (job_id: %s)", port_offset, self.runtime.job_id)
 
-        logger.info("Waiting for NATS (port %d)...", nats_port)
-        if not wait_for_port(self.runtime.nodes.head, nats_port, timeout=60):
+        # 300s timeout to handle slow container imports on first run
+        logger.info("Waiting for NATS (port %d) on %s...", nats_port, infra_node)
+        if not wait_for_port(infra_node, nats_port, timeout=300):
             raise RuntimeError("NATS failed to start")
         logger.info("NATS is ready")
 
-        logger.info("Waiting for etcd (port %d)...", etcd_port)
-        if not wait_for_port(self.runtime.nodes.head, etcd_port, timeout=60):
+        logger.info("Waiting for etcd (port %d) on %s...", etcd_port, infra_node)
+        if not wait_for_port(infra_node, etcd_port, timeout=300):
             raise RuntimeError("etcd failed to start")
         logger.info("etcd is ready")
 
@@ -204,9 +208,7 @@ class SweepOrchestrator(WorkerStageMixin, FrontendStageMixin, BenchmarkStageMixi
         if mounts_str:
             container_args += f" --container-mounts={mounts_str}"
 
-        # Calculate public port with offset
-        port_offset = get_port_offset(self.runtime.job_id)
-        public_port = 8000 + port_offset
+        public_port = self.runtime.frontend_port
 
         logger.info("")
         logger.info("=" * 60)
@@ -239,10 +241,15 @@ class SweepOrchestrator(WorkerStageMixin, FrontendStageMixin, BenchmarkStageMixi
 
     def run(self) -> int:
         """Run the complete sweep."""
+        # Create status reporter (fire-and-forget, no-op if not configured)
+        reporter = StatusReporter.from_config(self.config.reporting, self.runtime.job_id)
+        reporter.report_started(self.config, self.runtime)
+
         logger.info("Sweep Orchestrator")
         logger.info("Job ID: %s", self.runtime.job_id)
         logger.info("Run name: %s", self.runtime.run_name)
         logger.info("Config: %s", self.config.name)
+        logger.info("Infra node: %s", self.runtime.nodes.infra)
         logger.info("Head node: %s", self.runtime.nodes.head)
         logger.info("Worker nodes: %s", ", ".join(self.runtime.nodes.worker))
         if self.config.profiling.enabled:
@@ -256,31 +263,42 @@ class SweepOrchestrator(WorkerStageMixin, FrontendStageMixin, BenchmarkStageMixi
         exit_code = 1
 
         try:
+            # Stage 1: Head infrastructure (NATS, etcd)
+            reporter.report(JobStatus.STARTING, JobStage.HEAD_INFRASTRUCTURE, "Starting head infrastructure")
             head_proc = self.start_head_infrastructure(registry)
             if head_proc is not None:
                 registry.add_process(head_proc)
 
+            # Stage 2: Workers
+            reporter.report(JobStatus.WORKERS, JobStage.WORKERS, "Starting workers")
             worker_procs = self.start_all_workers()
             registry.add_processes(worker_procs)
 
+            # Stage 3: Frontend
+            reporter.report(JobStatus.FRONTEND, JobStage.FRONTEND, "Starting frontend")
             frontend_procs = self.start_frontend(registry)
             for proc in frontend_procs:
                 registry.add_process(proc)
 
             self._print_connection_info()
 
-            exit_code = self.run_benchmark(registry, stop_event)
+            # Stage 4: Benchmark (status reported AFTER health check passes)
+            exit_code = self.run_benchmark(registry, stop_event, reporter)
 
         except Exception as e:
             logger.exception("Error during sweep: %s", e)
+            reporter.report(JobStatus.FAILED, JobStage.CLEANUP, str(e))
             exit_code = 1
 
         finally:
             logger.info("Cleanup")
+            reporter.report_completed(exit_code)
             stop_event.set()
             registry.cleanup()
             if exit_code != 0:
                 registry.print_failure_details()
+            # Run post-processing (AI analysis if enabled)
+            self.run_postprocess(exit_code)
 
         return exit_code
 

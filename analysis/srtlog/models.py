@@ -39,7 +39,7 @@ class RunMetadata:
     def from_json(cls, json_data: dict, run_path: str) -> "RunMetadata":
         """Create from {jobid}.json metadata format.
 
-        Supports both old format (run_metadata) and new format (version 2.0).
+        Supports both old format (with run_metadata key) and new format (flat structure).
 
         Args:
             json_data: Parsed JSON from {jobid}.json file
@@ -48,20 +48,43 @@ class RunMetadata:
         Returns:
             RunMetadata instance
         """
-        # Check if this is the new v2.0 format
-        if json_data.get("version") == "2.0":
-            resources = json_data.get("resources", {})
-            model = json_data.get("model", {})
-            agg_workers = resources.get("agg_workers") or 0
+        # Check if this is the old format (with run_metadata key) or new format (flat)
+        if "run_metadata" in json_data:
+            # Old format
+            run_meta = json_data.get("run_metadata", {})
+            mode = run_meta.get("mode", "disaggregated")
+
+            return cls(
+                job_id=run_meta.get("slurm_job_id", ""),
+                path=run_path,
+                run_date=run_meta.get("run_date", ""),
+                container=run_meta.get("container", ""),
+                prefill_nodes=run_meta.get("prefill_nodes", 0),
+                decode_nodes=run_meta.get("decode_nodes", 0),
+                prefill_workers=run_meta.get("prefill_workers", 0),
+                decode_workers=run_meta.get("decode_workers", 0),
+                mode=mode,
+                job_name=run_meta.get("job_name", ""),
+                partition=run_meta.get("partition", ""),
+                model_dir=run_meta.get("model_dir", ""),
+                gpus_per_node=run_meta.get("gpus_per_node", 0),
+                gpu_type=run_meta.get("gpu_type", ""),
+                enable_multiple_frontends=run_meta.get("enable_multiple_frontends", False),
+                num_additional_frontends=run_meta.get("num_additional_frontends", 0),
+                agg_nodes=run_meta.get("agg_nodes", 0),
+                agg_workers=run_meta.get("agg_workers", 0),
+            )
+        else:
+            # New format (flat structure)
+            model_data = json_data.get("model", {})
+            resources_data = json_data.get("resources", {})
+            agg_workers = resources_data.get("agg_workers", 0)
 
             # Determine mode based on agg_workers
-            if agg_workers > 0:
-                mode = "aggregated"
-            else:
-                mode = "disaggregated"
+            mode = "aggregated" if agg_workers > 0 else "disaggregated"
 
             # agg_nodes: fall back to agg_workers if not specified
-            agg_nodes = (resources.get("agg_nodes") or 0) if agg_workers > 0 else 0
+            agg_nodes = resources_data.get("agg_nodes", 0)
             if agg_workers > 0 and agg_nodes == 0:
                 agg_nodes = agg_workers
 
@@ -69,47 +92,22 @@ class RunMetadata:
                 job_id=json_data.get("job_id", ""),
                 path=run_path,
                 run_date=json_data.get("generated_at", ""),
-                container=model.get("container", ""),
-                prefill_nodes=resources.get("prefill_nodes") or 0,
-                decode_nodes=resources.get("decode_nodes") or 0,
-                prefill_workers=resources.get("prefill_workers") or 0,
-                decode_workers=resources.get("decode_workers") or 0,
+                container=model_data.get("container", ""),
+                prefill_nodes=resources_data.get("prefill_nodes", 0),
+                decode_nodes=resources_data.get("decode_nodes", 0),
+                prefill_workers=resources_data.get("prefill_workers", 0),
+                decode_workers=resources_data.get("decode_workers", 0),
                 mode=mode,
                 job_name=json_data.get("job_name", ""),
-                partition="",
-                model_dir=model.get("path", ""),
-                gpus_per_node=resources.get("gpus_per_node") or 0,
-                gpu_type=resources.get("gpu_type", ""),
-                enable_multiple_frontends=False,
-                num_additional_frontends=0,
+                partition="",  # Not present in new format
+                model_dir=model_data.get("path", ""),  # Use model path as model_dir
+                gpus_per_node=resources_data.get("gpus_per_node", 0),
+                gpu_type=resources_data.get("gpu_type", ""),
+                enable_multiple_frontends=False,  # Not present in new format
+                num_additional_frontends=0,  # Not present in new format
                 agg_nodes=agg_nodes,
                 agg_workers=agg_workers,
             )
-
-        # Old format with run_metadata
-        run_meta = json_data.get("run_metadata", {})
-        mode = run_meta.get("mode", "disaggregated")
-
-        return cls(
-            job_id=run_meta.get("slurm_job_id", ""),
-            path=run_path,
-            run_date=run_meta.get("run_date", ""),
-            container=run_meta.get("container", ""),
-            prefill_nodes=run_meta.get("prefill_nodes", 0),
-            decode_nodes=run_meta.get("decode_nodes", 0),
-            prefill_workers=run_meta.get("prefill_workers", 0),
-            decode_workers=run_meta.get("decode_workers", 0),
-            mode=mode,
-            job_name=run_meta.get("job_name", ""),
-            partition=run_meta.get("partition", ""),
-            model_dir=run_meta.get("model_dir", ""),
-            gpus_per_node=run_meta.get("gpus_per_node", 0),
-            gpu_type=run_meta.get("gpu_type", ""),
-            enable_multiple_frontends=run_meta.get("enable_multiple_frontends", False),
-            num_additional_frontends=run_meta.get("num_additional_frontends", 0),
-            agg_nodes=run_meta.get("agg_nodes", 0),
-            agg_workers=run_meta.get("agg_workers", 0),
-        )
 
     @property
     def is_aggregated(self) -> bool:
@@ -223,19 +221,7 @@ class ProfilerResults:
         Returns:
             ProfilerResults instance (benchmark data added later from result files)
         """
-        # Check if this is the new v2.0 format
-        if json_data.get("version") == "2.0":
-            benchmark = json_data.get("benchmark", {})
-            return cls(
-                profiler_type=benchmark.get("type", "unknown"),
-                isl=str(benchmark.get("isl", "")),
-                osl=str(benchmark.get("osl", "")),
-                concurrencies=benchmark.get("concurrencies", ""),
-                req_rate=benchmark.get("req-rate", ""),
-            )
-
-        # Old format with profiler_metadata
-        profiler_meta = json_data.get("profiler_metadata", {})
+        profiler_meta = json_data.get("benchmark", {})
 
         return cls(
             profiler_type=profiler_meta.get("type", "unknown"),

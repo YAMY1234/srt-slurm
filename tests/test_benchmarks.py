@@ -16,11 +16,11 @@ class TestBenchmarkRegistry:
         """All expected benchmarks are registered."""
         benchmarks = list_benchmarks()
         assert "sa-bench" in benchmarks
+        assert "sglang-bench" in benchmarks
         assert "mmlu" in benchmarks
         assert "gpqa" in benchmarks
         assert "longbenchv2" in benchmarks
         assert "router" in benchmarks
-        assert "profiling" in benchmarks
 
     def test_get_runner_valid(self):
         """Can get runner for valid benchmark type."""
@@ -76,6 +76,121 @@ class TestSABenchRunner:
         )
         errors = runner.validate_config(config)
         assert errors == []
+
+
+class TestSGLangBenchRunner:
+    """Test SGLang-Bench runner."""
+
+    def test_validate_config_valid(self):
+        from srtctl.benchmarks.sglang_bench import SGLangBenchRunner
+        from srtctl.core.schema import BenchmarkConfig, ModelConfig, ResourceConfig, SrtConfig
+
+        runner = SGLangBenchRunner()
+        config = SrtConfig(
+            name="test",
+            model=ModelConfig(path="/model", container="/image", precision="fp4"),
+            resources=ResourceConfig(gpu_type="h100"),
+            benchmark=BenchmarkConfig(type="sglang-bench", isl=1024, osl=1024, concurrencies="4x8", req_rate="inf"),
+        )
+        errors = runner.validate_config(config)
+        assert errors == []
+
+    def test_validate_config_missing_fields(self):
+        from srtctl.benchmarks.sglang_bench import SGLangBenchRunner
+        from srtctl.core.schema import BenchmarkConfig, ModelConfig, ResourceConfig, SrtConfig
+
+        runner = SGLangBenchRunner()
+        config = SrtConfig(
+            name="test",
+            model=ModelConfig(path="/model", container="/image", precision="fp4"),
+            resources=ResourceConfig(gpu_type="h100"),
+            benchmark=BenchmarkConfig(type="sglang-bench"),
+        )
+        errors = runner.validate_config(config)
+        assert any("benchmark.isl is required" in e for e in errors)
+        assert any("benchmark.osl is required" in e for e in errors)
+        assert any("benchmark.concurrencies is required" in e for e in errors)
+
+    def test_validate_config_rejects_zero_values(self):
+        from srtctl.benchmarks.sglang_bench import SGLangBenchRunner
+        from srtctl.core.schema import BenchmarkConfig, ModelConfig, ResourceConfig, SrtConfig
+
+        runner = SGLangBenchRunner()
+        config = SrtConfig(
+            name="test",
+            model=ModelConfig(path="/model", container="/image", precision="fp4"),
+            resources=ResourceConfig(gpu_type="h100"),
+            benchmark=BenchmarkConfig(type="sglang-bench", isl=0, osl=1, concurrencies=[0], req_rate=0),
+        )
+        errors = runner.validate_config(config)
+        assert any("benchmark.isl must be a positive integer" in e for e in errors)
+        assert any("benchmark.concurrencies values must be positive integers" in e for e in errors)
+        assert any(
+            "benchmark.req_rate must be a positive integer" in e or "benchmark.req_rate must be a positive number" in e
+            for e in errors
+        )
+
+    def test_build_command(self):
+        from unittest.mock import MagicMock
+
+        from srtctl.benchmarks.sglang_bench import SGLangBenchRunner
+        from srtctl.core.schema import BenchmarkConfig, ModelConfig, ResourceConfig, SrtConfig
+
+        runner = SGLangBenchRunner()
+        runtime = MagicMock()
+        runtime.frontend_port = 8000
+
+        config = SrtConfig(
+            name="test",
+            model=ModelConfig(path="/model", container="/image", precision="fp4"),
+            resources=ResourceConfig(gpu_type="h100"),
+            benchmark=BenchmarkConfig(type="sglang-bench", isl=1024, osl=128, concurrencies=[1, 2]),
+        )
+
+        cmd = runner.build_command(config, runtime)
+        assert cmd == [
+            "bash",
+            "/srtctl-benchmarks/sglang-bench/bench.sh",
+            "http://localhost:8000",
+            "1024",
+            "128",
+            "1x2",
+            "inf",
+        ]
+
+
+class TestMooncakeRouterRunner:
+    """Test Mooncake Router benchmark runner."""
+
+    def test_build_command_includes_tokenizer_path(self):
+        """Build command passes tokenizer path to aiperf.
+
+        This fixes a bug where aiperf couldn't load the tokenizer because it was
+        using the served model name (e.g., "Qwen/Qwen3-32B") to find the tokenizer,
+        but that's not a valid HuggingFace ID or local path. The fix passes
+        --tokenizer /model explicitly since the model is mounted there.
+        """
+        from unittest.mock import MagicMock
+
+        from srtctl.benchmarks.mooncake_router import MooncakeRouterRunner
+
+        runner = MooncakeRouterRunner()
+
+        config = MagicMock()
+        config.benchmark = MagicMock()
+        config.benchmark.mooncake_workload = "conversation"
+        config.benchmark.ttft_threshold_ms = 2000
+        config.benchmark.itl_threshold_ms = 25
+        config.served_model_name = "Qwen/Qwen3-32B"
+
+        runtime = MagicMock()
+        runtime.frontend_port = 8000
+        runtime.is_hf_model = False  # Local model mounted at /model
+
+        cmd = runner.build_command(config, runtime)
+
+        # Command: bash, script, endpoint, model_name, workload, ttft, itl, tokenizer_path
+        assert cmd[7] == "/model"  # tokenizer path
 
 
 class TestScriptsExist:

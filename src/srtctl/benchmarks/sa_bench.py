@@ -60,6 +60,7 @@ class SABenchRunner(BenchmarkRunner):
         runtime: RuntimeContext,
     ) -> list[str]:
         b = config.benchmark
+        r = config.resources
         endpoint = f"http://localhost:{runtime.frontend_port}"
 
         # Format concurrencies as x-separated string if it's a list
@@ -67,16 +68,19 @@ class SABenchRunner(BenchmarkRunner):
         if isinstance(concurrencies, list):
             concurrencies = "x".join(str(c) for c in concurrencies)
 
-        # Get model name from sglang config (prefer decode, fallback to prefill, then default)
-        model_name = "nvidia/DeepSeek-R1-0528-NVFP4-v2"
-        sglang_config = config.backend.sglang_config
-        if sglang_config:
-            if sglang_config.decode and "served-model-name" in sglang_config.decode:
-                model_name = sglang_config.decode["served-model-name"]
-            elif sglang_config.prefill and "served-model-name" in sglang_config.prefill:
-                model_name = sglang_config.prefill["served-model-name"]
-            elif sglang_config.agg and "served-model-name" in sglang_config.agg:
-                model_name = sglang_config.agg["served-model-name"]
+        # Compute GPU info for result filename
+        is_disaggregated = r.is_disaggregated
+        if is_disaggregated:
+            prefill_gpus = r.prefill_gpus
+            decode_gpus = r.decode_gpus
+            total_gpus = prefill_gpus + decode_gpus
+        else:
+            total_gpus = (r.agg_nodes or 1) * r.gpus_per_node
+            prefill_gpus = 0
+            decode_gpus = 0
+
+        # Tokenizer path: HF model ID or container mount path
+        tokenizer_path = str(runtime.model_path) if runtime.is_hf_model else "/model"
 
         return [
             "bash",
@@ -86,5 +90,10 @@ class SABenchRunner(BenchmarkRunner):
             str(b.osl),
             str(concurrencies) if concurrencies else "",
             str(b.req_rate) if b.req_rate else "inf",
-            model_name,
+            tokenizer_path,
+            config.served_model_name,
+            str(is_disaggregated).lower(),
+            str(total_gpus),
+            str(prefill_gpus),
+            str(decode_gpus),
         ]

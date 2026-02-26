@@ -48,10 +48,32 @@ class SGLangBenchRunner(BenchmarkRunner):
 
         if b.isl is None:
             errors.append("benchmark.isl is required for sglang-bench")
+        elif b.isl <= 0:
+            errors.append("benchmark.isl must be a positive integer for sglang-bench")
         if b.osl is None:
             errors.append("benchmark.osl is required for sglang-bench")
+        elif b.osl <= 0:
+            errors.append("benchmark.osl must be a positive integer for sglang-bench")
         if b.concurrencies is None:
             errors.append("benchmark.concurrencies is required for sglang-bench")
+        else:
+            try:
+                concurrency_list = b.get_concurrency_list()
+            except Exception:
+                concurrency_list = []
+                errors.append(
+                    "benchmark.concurrencies must be a list of ints or an 'x'-separated string for sglang-bench"
+                )
+
+            if not concurrency_list:
+                errors.append("benchmark.concurrencies must not be empty for sglang-bench")
+            elif any(c <= 0 for c in concurrency_list):
+                errors.append("benchmark.concurrencies values must be positive integers for sglang-bench")
+
+        if isinstance(b.req_rate, int) and b.req_rate <= 0:
+            errors.append("benchmark.req_rate must be a positive integer or 'inf' for sglang-bench")
+        if isinstance(b.req_rate, str) and b.req_rate.strip() in ("0", "0.0"):
+            errors.append("benchmark.req_rate must be a positive number or 'inf' for sglang-bench")
 
         return errors
 
@@ -74,6 +96,6 @@ class SGLangBenchRunner(BenchmarkRunner):
             endpoint,
             str(b.isl),
             str(b.osl),
-            str(concurrencies) if concurrencies else "",
-            str(b.req_rate) if b.req_rate else "inf",
+            str(concurrencies),
+            str(b.req_rate) if b.req_rate is not None else "inf",
         ]

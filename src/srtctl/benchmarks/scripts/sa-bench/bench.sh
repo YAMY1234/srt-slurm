@@ -3,7 +3,9 @@
 # SPDX-License-Identifier: Apache-2.0
 
 # SA-Bench: Throughput/latency benchmark
-# Expects: endpoint isl osl concurrencies [req_rate] [model_name]
+# Expects: endpoint isl osl concurrencies req_rate model_name is_disaggregated total_gpus prefill_gpus decode_gpus
+
+set -e
 #
 # Optional profiling (via worker profiling endpoints):
 #   PROFILE_TYPE: "nsys" or "torch" to enable profiling (or "none" to disable)
@@ -21,23 +23,26 @@
 #   PROFILE_DECODE_START_STEP / PROFILE_DECODE_STOP_STEP
 #   PROFILE_AGG_START_STEP / PROFILE_AGG_STOP_STEP
 
-set -e
-
 ENDPOINT=$1
 ISL=$2
 OSL=$3
 CONCURRENCIES=$4
 REQ_RATE=${5:-inf}
-MODEL_NAME=${6:-"nvidia/DeepSeek-R1-0528-NVFP4-v2"}
+MODEL_PATH=${6:-/model/}
+MODEL_NAME=${7:-"model"}
+IS_DISAGGREGATED=${8:-false}
+TOTAL_GPUS=${9:-0}
+PREFILL_GPUS=${10:-0}
+DECODE_GPUS=${11:-0}
+RANDOM_RANGE_RATIO=${12:-0.8}
 
 # Parse endpoint into host:port
 HOST=$(echo "$ENDPOINT" | sed 's|http://||' | cut -d: -f1)
 PORT=$(echo "$ENDPOINT" | sed 's|http://||' | cut -d: -f2 | cut -d/ -f1)
 
-MODEL_PATH="/model/"
 WORK_DIR="$(dirname "$0")"
 
-echo "SA-Bench Config: endpoint=${ENDPOINT}; isl=${ISL}; osl=${OSL}; concurrencies=${CONCURRENCIES}; req_rate=${REQ_RATE}"
+echo "SA-Bench Config: endpoint=${ENDPOINT}; isl=${ISL}; osl=${OSL}; concurrencies=${CONCURRENCIES}; req_rate=${REQ_RATE}; model=${MODEL_NAME}"
 
 # Profiling shared helpers
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -63,65 +68,55 @@ curl -s "${ENDPOINT}/v1/chat/completions" \
     }" | head -c 200
 echo ""
 
+ulimit -n 65536 2>/dev/null || true  # May fail in containers without CAP_SYS_RESOURCE
+
+# Benchmark
+result_dir="/logs/sa-bench_isl_${ISL}_osl_${OSL}"
+mkdir -p "$result_dir"
+
 # Start profiling before benchmark
 start_all_profiling
 
-# Warmup - use same settings as benchmark for proper cache warming
 for concurrency in "${CONCURRENCY_LIST[@]}"; do
-    echo "Warming up with concurrency $concurrency"
-    echo "$(date '+%Y-%m-%d %H:%M:%S')"
+
+    # Warmup: use same settings as benchmark for proper cache warming
     # Scale warmup prompts based on concurrency to avoid excessive warmup time
-    # Large concurrency: fewer multiplier, small concurrency: more multiplier
     if [ "$concurrency" -ge 1024 ]; then
-        warmup_prompts=$((concurrency * 1))
+        num_warmup_prompts=$((concurrency * 1))
     elif [ "$concurrency" -ge 512 ]; then
-        warmup_prompts=$((concurrency * 2))
+        num_warmup_prompts=$((concurrency * 2))
     else
-        warmup_prompts=$((concurrency * 3))
+        num_warmup_prompts=$((concurrency * 3))
     fi
-    # Ensure minimum 6 warmup prompts for CUDA graph compilation
-    if [ "$warmup_prompts" -lt 6 ]; then
-        warmup_prompts=6
+    if [ "$num_warmup_prompts" -lt 6 ]; then
+        num_warmup_prompts=6
     fi
-    set -x
+
+    echo "Warming up with concurrency $concurrency (${num_warmup_prompts} prompts)"
+    echo "$(date '+%Y-%m-%d %H:%M:%S')"
     python3 -u "${WORK_DIR}/benchmark_serving.py" \
         --model "${MODEL_NAME}" --tokenizer "${MODEL_PATH}" \
         --host "$HOST" --port "$PORT" \
         --backend "dynamo" --endpoint /v1/completions \
         --disable-tqdm \
         --dataset-name random \
-        --num-prompts "$warmup_prompts" \
+        --num-prompts "$num_warmup_prompts" \
         --random-input-len "$ISL" \
         --random-output-len "$OSL" \
-        --random-range-ratio 0.8 \
+        --random-range-ratio "${RANDOM_RANGE_RATIO}" \
         --ignore-eos \
         --request-rate "${REQ_RATE}" \
         --percentile-metrics ttft,tpot,itl,e2el \
         --max-concurrency "$concurrency"
-    set +x
-done
 
-# Benchmark
-result_dir="/logs/sa-bench_isl_${ISL}_osl_${OSL}"
-mkdir -p "$result_dir"
-
-for concurrency in "${CONCURRENCY_LIST[@]}"; do
-    # Scale benchmark prompts based on concurrency to balance accuracy vs time
-    # Large concurrency: fewer multiplier, small concurrency: more multiplier
-    if [ "$concurrency" -ge 1024 ]; then
-        num_prompts=$((concurrency * 2))
-    elif [ "$concurrency" -ge 512 ]; then
-        num_prompts=$((concurrency * 3))
-    elif [ "$concurrency" -ge 128 ]; then
-        num_prompts=$((concurrency * 4))
+    num_prompts=$((concurrency * 10))
+    
+    # Generate result filename based on mode
+    if [ "$IS_DISAGGREGATED" = "true" ]; then
+        result_filename="results_concurrency_${concurrency}_gpus_${TOTAL_GPUS}_ctx_${PREFILL_GPUS}_gen_${DECODE_GPUS}.json"
     else
-        num_prompts=$((concurrency * 5))
+        result_filename="results_concurrency_${concurrency}_gpus_${TOTAL_GPUS}.json"
     fi
-    # Ensure minimum 30 samples for statistical stability
-    if [ "$num_prompts" -lt 30 ]; then
-        num_prompts=30
-    fi
-    result_filename="isl_${ISL}_osl_${OSL}_concurrency_${concurrency}_req_rate_${REQ_RATE}.json"
     
     echo "Running benchmark with concurrency: $concurrency"
     echo "$(date '+%Y-%m-%d %H:%M:%S')"
@@ -136,11 +131,12 @@ for concurrency in "${CONCURRENCY_LIST[@]}"; do
         --num-prompts "$num_prompts" \
         --random-input-len "$ISL" \
         --random-output-len "$OSL" \
-        --random-range-ratio 0.8 \
+        --random-range-ratio "${RANDOM_RANGE_RATIO}" \
         --ignore-eos \
         --request-rate "${REQ_RATE}" \
         --percentile-metrics ttft,tpot,itl,e2el \
         --max-concurrency "$concurrency" \
+        --use-chat-template \
         --save-result --result-dir "$result_dir" --result-filename "$result_filename"
     set +x
 

@@ -77,7 +77,6 @@ class DynamoFrontend:
             cmd = ["python3", "-m", "dynamo.frontend", f"--http-port={topology.frontend_port}"]
             cmd.extend(self.get_frontend_args_list(config.frontend.args))
 
-            # Calculate port offset based on job_id to avoid conflicts between jobs
             from srtctl.core.slurm import get_port_offset
 
             port_offset = get_port_offset(runtime.job_id)
@@ -85,8 +84,8 @@ class DynamoFrontend:
             etcd_port = 2379 + port_offset
 
             env_to_set = {
-                "ETCD_ENDPOINTS": f"http://{runtime.head_node_ip}:{etcd_port}",
-                "NATS_SERVER": f"nats://{runtime.head_node_ip}:{nats_port}",
+                "ETCD_ENDPOINTS": f"http://{runtime.infra_node_ip}:{etcd_port}",
+                "NATS_SERVER": f"nats://{runtime.infra_node_ip}:{nats_port}",
                 "DYN_REQUEST_PLANE": "nats",
             }
 
@@ -105,6 +104,9 @@ class DynamoFrontend:
                 container_mounts=runtime.container_mounts,
                 env_to_set=env_to_set,
                 bash_preamble=bash_preamble,
+                # TODO(jthomson): I don't have the faintest clue of
+                # why this is needed in later versions of Dynamo, but it is.
+                mpi="pmix",
             )
 
             processes.append(
@@ -131,7 +133,10 @@ class DynamoFrontend:
                 f"if [ -f '{script_path}' ]; then bash '{script_path}'; else echo 'WARNING: {script_path} not found'; fi"
             )
 
-        parts.append(config.dynamo.get_install_commands())
+        # Dynamo installation (required for dynamo frontend)
+        # Skip if dynamo.install is False (container already has dynamo installed)
+        if config.dynamo.install:
+            parts.append(config.dynamo.get_install_commands())
 
         if not parts:
             return None
