@@ -1,0 +1,69 @@
+# Repro: sgl-project/sglang#19383
+# TopKTopPSamplingFromProbs illegal memory access with max-running-requests=512
+# Bug only triggers with max-running-requests >= 512; 256 works fine.
+# https://github.com/sgl-project/sglang/issues/19383
+
+name: "qwen3.5-nvfp4-repro-19383"
+
+model:
+  path: "qwen3.5-nvfp4"
+  container: "dev"
+  precision: "fp4"
+
+extra_mount: ["/lustre/fsw/coreai_comparch_trtllm/yangminl/sglang:/sgl-workspace/sglang"]
+
+resources:
+  gpu_type: "gb200"
+  gpus_per_node: 4
+  agg_nodes: 1
+  agg_workers: 1
+
+backend:
+  type: sglang
+
+  aggregated_environment:
+    CUDA_LAUNCH_BLOCKING: "1"
+    PYTHONUNBUFFERED: "1"
+    NCCL_MNNVL_ENABLE: "1"
+    NCCL_CUMEM_ENABLE: "1"
+    SGLANG_DG_CACHE_DIR: "/configs/deepgemm-cache"
+    FLASHINFER_WORKSPACE_BASE: "/configs/flashinfer-cache"
+
+  sglang_config:
+    aggregated:
+      served-model-name: "nvidia/Qwen3.5-397B-A17B-NVFP4"
+      model-path: "/model/"
+      trust-remote-code: true
+
+      # Parallelism — match issue: --tp-size 4 --ep-size 4
+      tensor-parallel-size: 4
+      expert-parallel-size: 4
+
+      # NVFP4 quantization
+      quantization: modelopt_fp4
+
+      # Mamba hybrid (Qwen3.5)
+      mamba-ssm-dtype: "bfloat16"
+
+      # Bug trigger — 512 crashes, 256 works
+      max-running-requests: 512
+
+      chunked-prefill-size: 2048
+      disable-radix-cache: true
+
+      # Backends
+      attention-backend: trtllm_mha
+      moe-runner-backend: flashinfer_trtllm
+
+      reasoning-parser: qwen3
+      watchdog-timeout: 600
+
+benchmark:
+  type: "gsm8k"
+  num_examples: 1319
+  max_tokens: 16000
+  num_threads: 1319
+  num_shots: 8
+  temperature: 0.6
+  top_p: 0.95
+  top_k: 20

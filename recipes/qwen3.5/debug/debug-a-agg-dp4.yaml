@@ -1,0 +1,60 @@
+# Debug A: AGG + TP4/DP4/dp_attn on 1 node
+# Tests dp_attention computation correctness WITHOUT disaggregation
+# If this fails → dp_attention itself is broken for Qwen3.5
+# If this works → issue is in PD disagg slice transfer
+
+name: "qwen3.5-debug-a-agg-dp4"
+
+model:
+  path: "qwen3.5-fp8"
+  container: "dev"
+  precision: "fp8"
+
+extra_mount: ["/lustre/fsw/coreai_comparch_trtllm/yangminl/sglang:/sgl-workspace/sglang"]
+
+resources:
+  gpu_type: "gb200"
+  gpus_per_node: 4
+  agg_nodes: 1
+  agg_workers: 1
+
+backend:
+  type: sglang
+
+  aggregated_environment:
+    PYTHONUNBUFFERED: "1"
+    NCCL_MNNVL_ENABLE: "1"
+    NCCL_CUMEM_ENABLE: "1"
+    SGLANG_DG_CACHE_DIR: "/configs/deepgemm-cache"
+    FLASHINFER_WORKSPACE_BASE: "/configs/flashinfer-cache"
+
+  sglang_config:
+    aggregated:
+      served-model-name: "Qwen/Qwen3.5-397B-A17B-FP8"
+      model-path: "/model/"
+      trust-remote-code: true
+
+      # TP4/DP4 with dp_attention: each GPU runs attention independently
+      tp-size: 4
+      dp-size: 4
+      ep-size: 1
+      enable-dp-attention: true
+      moe-dense-tp-size: 1
+      enable-dp-lm-head: true
+
+      # Mamba hybrid model settings
+      mamba-scheduler-strategy: "extra_buffer"
+      mamba-track-interval: 128
+      mamba-ssm-dtype: "bfloat16"
+
+      mem-fraction-static: 0.60
+      chunked-prefill-size: 2048
+      context-length: 262144
+      watchdog-timeout: 600
+
+benchmark:
+  type: "gsm8k"
+  num_examples: 200
+  max_tokens: 16384
+  num_threads: 128
+  num_shots: 5

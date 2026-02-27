@@ -1,0 +1,73 @@
+# Qwen3.5-397B-A17B-FP8 Aggregated Mode on GB200
+# Single-node TP4, no PD disaggregation
+
+name: "qwen3.5-agg-tp4"
+
+model:
+  path: "qwen3.5-fp8"
+  container: "dev"
+  precision: "fp8"
+
+extra_mount: ["/lustre/fsw/coreai_comparch_trtllm/yangminl/sglang:/sgl-workspace/sglang"]
+
+resources:
+  gpu_type: "gb200"
+  gpus_per_node: 4
+  agg_nodes: 1
+  agg_workers: 1
+
+backend:
+  type: sglang
+
+  aggregated_environment:
+    PYTHONUNBUFFERED: "1"
+    NCCL_MNNVL_ENABLE: "1"
+    NCCL_CUMEM_ENABLE: "1"
+    SGLANG_DG_CACHE_DIR: "/configs/deepgemm-cache"
+    FLASHINFER_WORKSPACE_BASE: "/configs/flashinfer-cache"
+
+  sglang_config:
+    aggregated:
+      served-model-name: "Qwen/Qwen3.5-397B-A17B-FP8"
+      model-path: "/model/"
+      trust-remote-code: true
+
+      # Parallelism: TP4 = 1 GB200 node (4 GPUs)
+      tensor-parallel-size: 4
+
+      # Mamba hybrid model settings (Qwen3.5 inherits Qwen3-Next Mamba architecture)
+      # mamba-scheduler-strategy: "extra_buffer"
+      mamba-scheduler-strategy: "no_buffer"
+      disable-radix-cache: true
+      mamba-track-interval: 128
+      mamba-ssm-dtype: "bfloat16"
+      moe-runner-backend: "flashinfer_trtllm"
+      attention-backend: "trtllm_mha"
+      quantization: "fp8"
+      kv-cache-dtype: "fp8_e4m3"
+
+      # Memory: GB200 TP4 => ~99GB weights/GPU, ~83GB free/GPU
+      # 0.75 is conservative to accommodate mamba states + KV cache
+      mem-fraction-static: 0.80
+
+      # Prefill
+      chunked-prefill-size: 16384
+
+      enable-symm-mem: true
+
+      max-running-requests: 1024
+
+      # Context length
+      # context-length: 262144
+
+      watchdog-timeout: 600
+
+      enable-multimodal: true
+      reasoning-parser: qwen3
+
+benchmark:
+  type: "gpqa"
+  num_examples: 198
+  max_tokens: 65536
+  repeat: 8
+  num_threads: 1024
