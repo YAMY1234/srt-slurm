@@ -83,6 +83,11 @@ class RunMetadata:
             # Determine mode based on agg_workers
             mode = "aggregated" if agg_workers > 0 else "disaggregated"
 
+            # agg_nodes: fall back to agg_workers if not specified
+            agg_nodes = resources_data.get("agg_nodes", 0)
+            if agg_workers > 0 and agg_nodes == 0:
+                agg_nodes = agg_workers
+
             return cls(
                 job_id=json_data.get("job_id", ""),
                 path=run_path,
@@ -100,7 +105,7 @@ class RunMetadata:
                 gpu_type=resources_data.get("gpu_type", ""),
                 enable_multiple_frontends=False,  # Not present in new format
                 num_additional_frontends=0,  # Not present in new format
-                agg_nodes=resources_data.get("agg_nodes", 0),  # Not present in new format
+                agg_nodes=agg_nodes,
                 agg_workers=agg_workers,
             )
 
@@ -206,7 +211,9 @@ class ProfilerResults:
 
     @classmethod
     def from_json(cls, json_data: dict) -> "ProfilerResults":
-        """Create from {jobid}.json profiler_metadata section.
+        """Create from {jobid}.json profiler_metadata or benchmark section.
+
+        Supports both old format (profiler_metadata) and new format (version 2.0 benchmark).
 
         Args:
             json_data: Parsed JSON from {jobid}.json file
@@ -275,6 +282,34 @@ class ProfilerResults:
         self.num_prompts = results.get("num_prompts", [])
 
 
+def _extract_job_id_from_dirname(dirname: str) -> str:
+    """Extract job ID from directory name.
+
+    Supports multiple formats:
+    - "2518" (just job ID)
+    - "2520-pp_tp_mtp2" (new format: {job_id}-{name})
+    - "3667_1P_1D_20251110_192145" (old format: {job_id}_{topology}_{timestamp})
+
+    Args:
+        dirname: Directory name
+
+    Returns:
+        Job ID as string, or the dirname itself if no separator found
+    """
+    # Try hyphen first (new format)
+    if "-" in dirname:
+        first_part = dirname.split("-")[0]
+        if first_part.isdigit():
+            return first_part
+    # Fall back to underscore (old format)
+    if "_" in dirname:
+        first_part = dirname.split("_")[0]
+        if first_part.isdigit():
+            return first_part
+    # No separator or first part is not a digit, return as-is
+    return dirname
+
+
 @dataclass
 class BenchmarkRun:
     """Complete benchmark run with metadata and profiler results."""
@@ -300,7 +335,7 @@ class BenchmarkRun:
 
         # Extract job ID from directory name
         dirname = os.path.basename(run_path)
-        job_id = dirname.split("_")[0] if "_" in dirname else int(dirname)
+        job_id = _extract_job_id_from_dirname(dirname)
         json_path = os.path.join(run_path, f"{job_id}.json")
 
         if not os.path.exists(json_path):
@@ -367,7 +402,7 @@ class BatchMetrics:
     tp: int
     ep: int
     batch_type: str  # "prefill" or "decode"
-    # Optional metrics
+    # Optional metrics - Prefill
     new_seq: int | None = None
     new_token: int | None = None
     cached_token: int | None = None
@@ -377,10 +412,14 @@ class BatchMetrics:
     prealloc_req: int | None = None
     inflight_req: int | None = None
     input_throughput: float | None = None
+    # Optional metrics - Decode
     gen_throughput: float | None = None
     transfer_req: int | None = None
     num_tokens: int | None = None
     preallocated_usage: float | None = None
+    accept_len: float | None = None
+    accept_rate: float | None = None
+    retracted_req: int | None = None
 
     @property
     def cache_hit_rate(self) -> float | None:

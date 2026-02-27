@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 # LongBench-v2 evaluation
-# Expects: endpoint [max_context_length] [num_threads] [max_tokens] [num_examples] [categories]
+# Expects: endpoint [max_context_length] [num_threads] [max_tokens] [num_examples] [categories] [repeat]
 
 set -e
 
@@ -13,10 +13,11 @@ NUM_THREADS=${3:-16}
 MAX_TOKENS=${4:-16384}
 NUM_EXAMPLES=${5:-}
 CATEGORIES=${6:-}
+REPEAT=${7:-1}
 
 MODEL_NAME="nvidia/DeepSeek-R1-0528-NVFP4-v2"
 
-echo "LongBench-v2 Config: endpoint=${ENDPOINT}; max_context_length=${MAX_CONTEXT_LENGTH}; num_threads=${NUM_THREADS}; max_tokens=${MAX_TOKENS}; num_examples=${NUM_EXAMPLES:-all}; categories=${CATEGORIES:-all}"
+echo "LongBench-v2 Config: endpoint=${ENDPOINT}; max_context_length=${MAX_CONTEXT_LENGTH}; num_threads=${NUM_THREADS}; max_tokens=${MAX_TOKENS}; num_examples=${NUM_EXAMPLES:-all}; categories=${CATEGORIES:-all}; repeat=${REPEAT}"
 
 # Create results directory
 result_dir="/logs/accuracy"
@@ -34,7 +35,8 @@ cmd="python3 -m sglang.test.run_eval \
     --eval-name longbench_v2 \
     --max-tokens ${MAX_TOKENS} \
     --max-context-length ${MAX_CONTEXT_LENGTH} \
-    --num-threads ${NUM_THREADS}"
+    --num-threads ${NUM_THREADS} \
+    --repeat ${REPEAT}"
 
 # Add optional arguments
 if [ -n "$NUM_EXAMPLES" ]; then

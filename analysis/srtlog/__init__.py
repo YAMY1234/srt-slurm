@@ -13,7 +13,7 @@ from .config_reader import (
     parse_command_line_from_err,
     parse_command_line_to_dict,
 )
-from .log_parser import NodeAnalyzer
+from .log_parser import NodeAnalyzer, compute_worker_aggregate_stats
 from .models import (
     BatchMetrics,
     BenchmarkRun,
@@ -28,6 +28,7 @@ __all__ = [
     # Class-based API
     "RunLoader",
     "NodeAnalyzer",
+    "compute_worker_aggregate_stats",
     "BenchmarkRun",
     "RunMetadata",
     "ProfilerResults",

@@ -537,6 +537,7 @@ def create_pareto_graph(
     show_frontier: bool = False,
     y_metric: str = "Output TPS/GPU",
     run_labels: dict[str, str] | None = None,
+    run_aggregate_stats: dict[str, dict] | None = None,
 ) -> go.Figure:
     """Create interactive Pareto graph with optional cutoff line and frontier.
 
@@ -549,6 +550,8 @@ def create_pareto_graph(
         y_metric: Y-axis metric to plot ("Output TPS/GPU" or "Total TPS/GPU")
                  Both metrics are normalized per GPU
         run_labels: Optional dict mapping run_id to display label for legend
+        run_aggregate_stats: Optional dict mapping run_id to aggregate worker stats
+                            (from compute_worker_aggregate_stats)
     """
     fig = go.Figure()
 
@@ -685,6 +688,58 @@ def create_pareto_graph(
                 return "N/A"
             return f"{val:.2f}"
 
+        # Build hover text with aggregate stats if available
+        def build_hover_text(row):
+            base_text = (
+                f"Run: {row['Run ID']}<br>"
+                f"Concurrency: {row['Concurrency']}<br>"
+                f"Output TPS/User: {format_value(row['Output TPS/User'])}<br>"
+                f"{y_metric}: {format_value(row[y_metric])}<br>"
+                f"{tps_label}: {format_value(row[tps_column])}<br>"
+                f"Mean TTFT: {format_value(row['Mean TTFT (ms)'])} ms<br>"
+                f"Mean TPOT: {format_value(row['Mean TPOT (ms)'])} ms"
+            )
+
+            # Add aggregate stats if available for this run
+            if run_aggregate_stats and run_id in run_aggregate_stats:
+                stats = run_aggregate_stats[run_id]
+                prefill = stats.get("prefill", {})
+                decode = stats.get("decode", {})
+
+                if prefill:
+                    base_text += "<br><br><b>--- Prefill Avg ---</b>"
+                    if "avg_input_throughput" in prefill:
+                        base_text += f"<br>input tps: {prefill['avg_input_throughput']:.1f}"
+                    if "avg_new_token" in prefill:
+                        base_text += f"<br>#new-token: {prefill['avg_new_token']:.0f}"
+                    if "avg_new_seq" in prefill:
+                        base_text += f"<br>#new-seq: {prefill['avg_new_seq']:.1f}"
+                    if "avg_token_usage" in prefill:
+                        base_text += f"<br>token usage: {prefill['avg_token_usage']:.2f}"
+                    if "avg_queue_req" in prefill:
+                        base_text += f"<br>#queue-req: {prefill['avg_queue_req']:.1f}"
+                    if "avg_inflight_req" in prefill:
+                        base_text += f"<br>#inflight-req: {prefill['avg_inflight_req']:.1f}"
+
+                if decode:
+                    base_text += "<br><br><b>--- Decode Avg ---</b>"
+                    if "avg_gen_throughput" in decode:
+                        base_text += f"<br>gen tps: {decode['avg_gen_throughput']:.1f}"
+                    if "avg_running_req" in decode:
+                        base_text += f"<br>#running-req: {decode['avg_running_req']:.1f}"
+                    if "avg_token_usage" in decode:
+                        base_text += f"<br>token usage: {decode['avg_token_usage']:.2f}"
+                    if "avg_accept_len" in decode:
+                        base_text += f"<br>accept len: {decode['avg_accept_len']:.2f}"
+                    if "avg_accept_rate" in decode:
+                        base_text += f"<br>accept rate: {decode['avg_accept_rate']:.2f}"
+                    if "avg_transfer_req" in decode:
+                        base_text += f"<br>#transfer-req: {decode['avg_transfer_req']:.1f}"
+                    if "avg_queue_req" in decode:
+                        base_text += f"<br>#queue-req: {decode['avg_queue_req']:.1f}"
+
+            return base_text
+
         fig.add_trace(
             go.Scatter(
                 x=run_data["Output TPS/User"],
@@ -693,16 +748,7 @@ def create_pareto_graph(
                 name=legend_name,
                 marker={"size": 10, "color": colors[idx % len(colors)]},
                 line={"color": colors[idx % len(colors)], "width": 2},
-                text=[
-                    f"Run: {row['Run ID']}<br>"
-                    f"Concurrency: {row['Concurrency']}<br>"
-                    f"Output TPS/User: {format_value(row['Output TPS/User'])}<br>"
-                    f"{y_metric}: {format_value(row[y_metric])}<br>"
-                    f"{tps_label}: {format_value(row[tps_column])}<br>"
-                    f"Mean TTFT: {format_value(row['Mean TTFT (ms)'])} ms<br>"
-                    f"Mean TPOT: {format_value(row['Mean TPOT (ms)'])} ms"
-                    for _, row in run_data.iterrows()
-                ],
+                text=[build_hover_text(row) for _, row in run_data.iterrows()],
                 hoverinfo="text",
             )
         )

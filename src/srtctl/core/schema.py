@@ -526,6 +526,7 @@ class BenchmarkConfig:
     num_threads: int | None = None
     max_context_length: int | None = None
     categories: list[str] | None = None
+    num_shots: int | None = None  # GSM8K few-shot examples
     # Router benchmark fields
     num_requests: int | None = None
     concurrency: int | None = None
@@ -534,6 +535,7 @@ class BenchmarkConfig:
     mooncake_workload: str | None = None  # "mooncake", "conversation", "synthetic", "toolagent"
     ttft_threshold_ms: int | None = None  # Goodput TTFT threshold in ms (default: 2000)
     itl_threshold_ms: int | None = None  # Goodput ITL threshold in ms (default: 25)
+    random_range_ratio: float | None = None  # Random input/output length range ratio (default: 0.8)
 
     def get_concurrency_list(self) -> list[int]:
         if self.concurrencies is None:
@@ -670,12 +672,12 @@ class DynamoConfig:
     """Dynamo installation configuration.
 
     Only one of version, hash, or top_of_tree should be specified.
-    Defaults to version="0.8.0" (pip install).
+    Defaults to version="0.7.0" (pip install).
 
     Options:
         install: Whether to install dynamo at all (default: True). Set to False
                  if your container already has dynamo pre-installed.
-        version: Install specific version from PyPI (e.g., "0.8.0")
+        version: Install specific version from PyPI (e.g., "0.7.0")
         hash: Clone repo and checkout specific commit hash
         top_of_tree: Clone repo at HEAD (latest)
 
@@ -683,7 +685,7 @@ class DynamoConfig:
     """
 
     install: bool = True
-    version: str | None = "0.8.0"
+    version: str | None = "0.7.0"
     hash: str | None = None
     top_of_tree: bool = False
 

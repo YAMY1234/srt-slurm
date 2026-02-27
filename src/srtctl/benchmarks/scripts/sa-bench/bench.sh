@@ -79,7 +79,21 @@ start_all_profiling
 
 for concurrency in "${CONCURRENCY_LIST[@]}"; do
 
-    num_warmup_prompts=$((concurrency * 2))
+    # Warmup: use same settings as benchmark for proper cache warming
+    # Scale warmup prompts based on concurrency to avoid excessive warmup time
+    if [ "$concurrency" -ge 1024 ]; then
+        num_warmup_prompts=$((concurrency * 1))
+    elif [ "$concurrency" -ge 512 ]; then
+        num_warmup_prompts=$((concurrency * 2))
+    else
+        num_warmup_prompts=$((concurrency * 3))
+    fi
+    if [ "$num_warmup_prompts" -lt 6 ]; then
+        num_warmup_prompts=6
+    fi
+
+    echo "Warming up with concurrency $concurrency (${num_warmup_prompts} prompts)"
+    echo "$(date '+%Y-%m-%d %H:%M:%S')"
     python3 -u "${WORK_DIR}/benchmark_serving.py" \
         --model "${MODEL_NAME}" --tokenizer "${MODEL_PATH}" \
         --host "$HOST" --port "$PORT" \
@@ -91,7 +105,7 @@ for concurrency in "${CONCURRENCY_LIST[@]}"; do
         --random-output-len "$OSL" \
         --random-range-ratio "${RANDOM_RANGE_RATIO}" \
         --ignore-eos \
-        --request-rate 250 \
+        --request-rate "${REQ_RATE}" \
         --percentile-metrics ttft,tpot,itl,e2el \
         --max-concurrency "$concurrency"
 
@@ -134,4 +148,3 @@ done
 stop_all_profiling
 
 echo "SA-Bench complete. Results in $result_dir"
-
