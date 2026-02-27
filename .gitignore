@@ -1,6 +1,7 @@
 ignition/
 # Logs directory - ignore all benchmark runs
 logs/*/
+logs*/*/
 
 # Dry-run output directories (local testing artifacts)
 dry-runs/
@@ -47,12 +48,14 @@ configs/etcdctl
 configs/*.whl
 configs/*.deb
 configs/*.tar.gz
+configs/flashinfer-cache/*
+outputs/*
 
 .ruff_cache/
 *.egg-info/
 
 .coverage
 
+outputs/
 configs/dg-*
 configs/flashinfer-cache/
-outputs/*
