@@ -156,7 +156,7 @@ def generate_minimal_sbatch_script(
     config_path: Path,
     setup_script: str | None = None,
     output_dir: Path | None = None,
-) -> str:
+) -> tuple[str, str]:
     """Generate minimal sbatch script that calls the Python orchestrator.
 
     The orchestrator runs INSIDE the container on the head node.
@@ -169,7 +169,7 @@ def generate_minimal_sbatch_script(
         output_dir: Custom output directory (CLI flag, highest priority)
 
     Returns:
-        Rendered sbatch script as string
+        Tuple of (rendered_script, recipe_name)
     """
     from jinja2 import Environment, FileSystemLoader
 
@@ -206,6 +206,9 @@ def generate_minimal_sbatch_script(
 
     job_name = get_job_name(config)
 
+    # Extract recipe name from config path for output directory naming
+    recipe_name = config_path.stem if config_path else "unknown"
+
     rendered = template.render(
         job_name=job_name,
         total_nodes=total_nodes,
@@ -216,6 +219,7 @@ def generate_minimal_sbatch_script(
         time_limit=config.slurm.time_limit or "01:00:00",
         config_path=str(config_path.resolve()),
         timestamp=timestamp,
+        recipe_name=recipe_name,
         use_gpus_per_node_directive=get_srtslurm_setting("use_gpus_per_node_directive", True),
         use_segment_sbatch_directive=get_srtslurm_setting("use_segment_sbatch_directive", True),
         use_exclusive_sbatch_directive=get_srtslurm_setting("use_exclusive_sbatch_directive", False),
@@ -226,7 +230,7 @@ def generate_minimal_sbatch_script(
         setup_script=setup_script,
     )
 
-    return rendered
+    return rendered, recipe_name
 
 
 def submit_with_orchestrator(
@@ -262,7 +266,7 @@ def submit_with_orchestrator(
     if config is None:
         config = load_config(config_path)
 
-    script_content = generate_minimal_sbatch_script(
+    script_content, recipe_name = generate_minimal_sbatch_script(
         config=config,
         config_path=config_path,
         setup_script=setup_script,
@@ -305,18 +309,19 @@ def submit_with_orchestrator(
 
         job_id = result.stdout.strip().split()[-1]
 
-        # Determine output directory
+        # Determine output directory with {job_id}-{recipe_name} naming
         # Priority: CLI -o flag > srtslurm.yaml output_dir > srtctl_root/outputs
+        dir_name = f"{job_id}-{recipe_name}"
         if output_dir:
-            job_output_dir = output_dir / job_id
+            job_output_dir = output_dir / dir_name
         else:
             custom_output_dir = get_srtslurm_setting("output_dir")
             if custom_output_dir:
-                job_output_dir = Path(os.path.expandvars(custom_output_dir)) / job_id
+                job_output_dir = Path(os.path.expandvars(custom_output_dir)) / dir_name
             else:
                 srtctl_root = get_srtslurm_setting("srtctl_root")
                 srtctl_source = Path(srtctl_root) if srtctl_root else Path(__file__).parent.parent.parent.parent
-                job_output_dir = srtctl_source / "outputs" / job_id
+                job_output_dir = srtctl_source / "outputs" / dir_name
         job_output_dir.mkdir(parents=True, exist_ok=True)
 
         shutil.copy(source_config_path or config_path, job_output_dir / "config.yaml")
@@ -347,6 +352,7 @@ def submit_with_orchestrator(
                 "decode_nodes": config.resources.decode_nodes,
                 "prefill_workers": config.resources.num_prefill,
                 "decode_workers": config.resources.num_decode,
+                "agg_nodes": config.resources.agg_nodes,
                 "agg_workers": config.resources.num_agg,
             },
             # Backend and frontend
