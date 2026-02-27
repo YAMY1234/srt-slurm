@@ -78,12 +78,12 @@ def load_data(logs_dir, _dir_fingerprint=None):
 
 
 @st.cache_data(show_spinner="Loading node metrics from logs...")
-def load_node_metrics(run_path: str, _cache_version: int = 2):
+def load_node_metrics(run_path: str, _cache_version: int = 3):
     """Load and cache node metrics from .err/.out files.
 
     Args:
         run_path: Path to the run directory
-        _cache_version: Bump to invalidate cache after parser changes
+        _cache_version: Bump to invalidate cache after parser changes (v3: added accept_len, accept_rate, retracted_req)
 
     Returns:
         List of parsed node metrics (as dicts for compatibility)

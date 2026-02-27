@@ -2,13 +2,39 @@
 Pareto Frontier Analysis Tab
 """
 
+import os
+
 import pandas as pd
 import streamlit as st
 
+from analysis.srtlog import compute_worker_aggregate_stats
 from analysis.srtlog.visualizations import calculate_pareto_frontier, create_pareto_graph
 
 
-def render(df: pd.DataFrame, selected_runs: list[str], run_legend_labels: dict, pareto_options: dict):
+@st.cache_data(show_spinner="Computing worker aggregate stats...")
+def get_run_aggregate_stats(run_path: str, run_id: str) -> dict:
+    """Compute and cache aggregate stats for a single run.
+
+    Args:
+        run_path: Path to the run directory
+        run_id: Run ID for cache key
+
+    Returns:
+        Dict with prefill and decode aggregate stats
+    """
+    logs_path = os.path.join(run_path, "logs")
+    if os.path.exists(logs_path):
+        return compute_worker_aggregate_stats(logs_path)
+    return compute_worker_aggregate_stats(run_path)
+
+
+def render(
+    df: pd.DataFrame,
+    selected_runs: list[str],
+    run_legend_labels: dict,
+    pareto_options: dict,
+    filtered_runs: list = None,
+):
     """Render the Pareto frontier analysis tab.
 
     Args:
@@ -16,6 +42,7 @@ def render(df: pd.DataFrame, selected_runs: list[str], run_legend_labels: dict, 
         selected_runs: List of run IDs
         run_legend_labels: Dict mapping run_id to display label
         pareto_options: Dict with show_cutoff, cutoff_value, show_frontier
+        filtered_runs: List of BenchmarkRun objects for computing aggregate stats
     """
     st.subheader("Pareto Frontier Analysis")
 
@@ -39,6 +66,21 @@ def render(df: pd.DataFrame, selected_runs: list[str], run_legend_labels: dict, 
         **Output TPS/User** (throughput per user).
         """)
 
+    # Compute aggregate stats for each run (from worker logs)
+    run_aggregate_stats = {}
+    if filtered_runs:
+        for run in filtered_runs:
+            # Build run_id to match what's used in selected_runs
+            if run.metadata.is_aggregated:
+                run_id = f"{run.job_id}_{run.metadata.agg_workers}A_{run.metadata.run_date}"
+            else:
+                run_id = f"{run.job_id}_{run.metadata.prefill_workers}P_{run.metadata.decode_workers}D_{run.metadata.run_date}"
+
+            if run_id in selected_runs:
+                stats = get_run_aggregate_stats(run.metadata.path, run_id)
+                if stats.get("prefill") or stats.get("decode"):
+                    run_aggregate_stats[run_id] = stats
+
     pareto_fig = create_pareto_graph(
         df,
         selected_runs,
@@ -47,6 +89,7 @@ def render(df: pd.DataFrame, selected_runs: list[str], run_legend_labels: dict, 
         pareto_options["show_frontier"],
         y_axis_metric,
         run_legend_labels,
+        run_aggregate_stats if run_aggregate_stats else None,
     )
     pareto_fig.update_xaxes(showgrid=True)
     pareto_fig.update_yaxes(showgrid=True)
