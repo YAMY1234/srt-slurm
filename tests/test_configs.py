@@ -97,11 +97,11 @@ class TestDynamoConfig:
     """Tests for DynamoConfig."""
 
     def test_default_version(self):
-        """Default is version 0.8.0."""
+        """Default is version 0.7.0."""
         from srtctl.core.schema import DynamoConfig
 
         config = DynamoConfig()
-        assert config.version == "0.8.0"
+        assert config.version == "0.7.0"
         assert config.hash is None
         assert config.top_of_tree is False
         assert not config.needs_source_install
@@ -110,11 +110,11 @@ class TestDynamoConfig:
         """Version config generates pip install command."""
         from srtctl.core.schema import DynamoConfig
 
-        config = DynamoConfig(version="0.8.0")
+        config = DynamoConfig(version="0.7.0")
         cmd = config.get_install_commands()
         assert "pip install" in cmd
-        assert "ai-dynamo-runtime==0.8.0" in cmd
-        assert "ai-dynamo==0.8.0" in cmd
+        assert "ai-dynamo-runtime==0.7.0" in cmd
+        assert "ai-dynamo==0.7.0" in cmd
 
     def test_hash_install_command(self):
         """Hash config generates source install command."""
