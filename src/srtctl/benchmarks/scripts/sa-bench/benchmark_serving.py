@@ -248,7 +248,7 @@ def sample_vision_arena_requests(
         output_len = fixed_output_len
 
         assert isinstance(data["images"][0], Image), (
-            "Input image format must be `PIL.Image.Image`, " f"given {type(data['image'])}."
+            f"Input image format must be `PIL.Image.Image`, given {type(data['image'])}."
         )
         image: Image = data["images"][0]
         image = image.convert("RGB")
@@ -332,6 +332,128 @@ def sample_hf_requests(
     return sampled_requests
 
 
+def _get_prompt_cache_path(input_len: int, output_len: int, range_ratio: float) -> str:
+    """Generate cache file path for prompts."""
+    cache_dir = "/configs/prompt_cache"
+    # Use a simple key based on workload parameters (model-agnostic for simplicity)
+    cache_key = f"random_{input_len}_{output_len}_{range_ratio:.2f}"
+    return os.path.join(cache_dir, f"{cache_key}.pkl")
+
+
+def _load_prompt_cache(cache_path: str) -> list[tuple[str, int, int, None]] | None:
+    """Load cached prompts from file."""
+    if not os.path.exists(cache_path):
+        return None
+    try:
+        import pickle
+
+        with open(cache_path, "rb") as f:
+            data = pickle.load(f)
+        return data.get("prompts", None)
+    except Exception as e:
+        print(f"[Cache] Warning: Failed to load cache {cache_path}: {e}", flush=True)
+        return None
+
+
+def _save_prompt_cache(
+    cache_path: str, prompts: list[tuple[str, int, int, None]], input_len: int, output_len: int, range_ratio: float
+) -> None:
+    """Save prompts to cache file."""
+    try:
+        import pickle
+
+        cache_dir = os.path.dirname(cache_path)
+        os.makedirs(cache_dir, exist_ok=True)
+        data = {
+            "prompts": prompts,
+            "metadata": {
+                "input_len": input_len,
+                "output_len": output_len,
+                "range_ratio": range_ratio,
+                "count": len(prompts),
+                "created_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+            },
+        }
+        with open(cache_path, "wb") as f:
+            pickle.dump(data, f)
+        print(f"[Cache] Saved {len(prompts)} prompts to {cache_path}", flush=True)
+    except Exception as e:
+        print(f"[Cache] Warning: Failed to save cache {cache_path}: {e}", flush=True)
+
+
+def _generate_random_prompts(
+    num_to_generate: int,
+    prefix_len: int,
+    input_len: int,
+    output_len: int,
+    range_ratio: float,
+    tokenizer: PreTrainedTokenizerBase,
+    use_chat_template: bool,
+    start_offset: int = 0,  # For incremental generation, avoid duplicate prompts
+) -> list[tuple[str, int, int, None]]:
+    """Generate random prompts (core generation logic)."""
+    prefix_token_ids = np.random.randint(0, tokenizer.vocab_size, size=prefix_len).tolist()
+
+    chat_template_len = 0
+    effective_input_len = input_len
+    if use_chat_template:
+        chat_template_dummy = tokenizer.apply_chat_template(
+            [{"role": "user", "content": "a"}],
+            add_generation_prompt=True,
+            tokenize=False,
+        )
+        tokenized_chat_template_dummy = tokenizer.encode(chat_template_dummy, add_special_tokens=False)
+        chat_template_len = len(tokenized_chat_template_dummy) - 1
+        effective_input_len = input_len - chat_template_len
+
+    input_lens = np.random.randint(
+        int(effective_input_len * range_ratio),
+        effective_input_len + 1,
+        size=num_to_generate,
+    )
+    output_lens = np.random.randint(
+        int(output_len * range_ratio),
+        output_len + 1,
+        size=num_to_generate,
+    )
+    # Use start_offset to ensure different prompts for incremental generation
+    offsets = np.random.randint(0, tokenizer.vocab_size, size=num_to_generate)
+
+    prompts = []
+    print(f"[Preparing] Generating {num_to_generate} random prompts with ~{input_len} tokens each...", flush=True)
+    last_progress_time = time.time()
+    PROGRESS_INTERVAL = 10
+
+    for i in range(num_to_generate):
+        # Add start_offset to ensure uniqueness in incremental generation
+        idx = start_offset + i
+        prompt = tokenizer.decode(
+            prefix_token_ids + [(offsets[i] + idx + j) % tokenizer.vocab_size for j in range(input_lens[i])]
+        )
+        re_encoded_sequence = tokenizer.encode(prompt, add_special_tokens=False)[: (prefix_len + input_lens[i])]
+        prompt = tokenizer.decode(re_encoded_sequence)
+
+        actual_input_len = prefix_len + input_lens[i]
+        if use_chat_template:
+            prompt = tokenizer.apply_chat_template(
+                [{"role": "user", "content": prompt}],
+                add_generation_prompt=True,
+                tokenize=False,
+            )
+            actual_input_len += chat_template_len
+
+        prompts.append((prompt, int(actual_input_len), int(output_lens[i]), None))
+
+        current_time = time.time()
+        if current_time - last_progress_time >= PROGRESS_INTERVAL:
+            pct = (i + 1) / num_to_generate * 100
+            print(f"[Preparing] Prompt generation: {i + 1}/{num_to_generate} ({pct:.1f}%)", flush=True)
+            last_progress_time = current_time
+
+    print(f"[Preparing] Generated {num_to_generate} prompts.", flush=True)
+    return prompts
+
+
 def sample_random_requests(
     prefix_len: int,
     input_len: int,
@@ -341,46 +463,62 @@ def sample_random_requests(
     tokenizer: PreTrainedTokenizerBase,
     use_chat_template: bool = False,
 ) -> list[tuple[str, int, int]]:
-    prefix_token_ids = np.random.randint(0, tokenizer.vocab_size, size=prefix_len).tolist()
-    if use_chat_template:
-        chat_template_dummy = tokenizer.apply_chat_template(
-            [{"role": "user", "content": "a"}],
-            add_generation_prompt=True,
-            tokenize=False,
-        )
-        tokenized_chat_template_dummy = tokenizer.encode(chat_template_dummy, add_special_tokens=False)
-        chat_template_len = len(tokenized_chat_template_dummy) - 1
-        input_len = input_len - chat_template_len
+    """
+    Generate random prompts with caching support.
 
-    input_lens = np.random.randint(
-        int(input_len * range_ratio),
-        input_len + 1,
-        size=num_prompts,
-    )
-    output_lens = np.random.randint(
-        int(output_len * range_ratio),
-        output_len + 1,
-        size=num_prompts,
-    )
-    offsets = np.random.randint(0, tokenizer.vocab_size, size=num_prompts)
-    input_requests = []
-    for i in range(num_prompts):
-        prompt = tokenizer.decode(
-            prefix_token_ids + [(offsets[i] + i + j) % tokenizer.vocab_size for j in range(input_lens[i])]
-        )
-        re_encoded_sequence = tokenizer.encode(prompt, add_special_tokens=False)[: (prefix_len + input_lens[i])]
-        prompt = tokenizer.decode(re_encoded_sequence)
-        if use_chat_template:
-            prompt = tokenizer.apply_chat_template(
-                [{"role": "user", "content": prompt}],
-                add_generation_prompt=True,
-                tokenize=False,
+    Cache logic:
+    - Cache key: {input_len}_{output_len}_{range_ratio}
+    - If cache exists and has >= num_prompts: use cached[:num_prompts]
+    - If cache exists but has < num_prompts: incremental generation + update cache
+    - If no cache: full generation + save cache
+    """
+    cache_path = _get_prompt_cache_path(input_len, output_len, range_ratio)
+    cached_prompts = _load_prompt_cache(cache_path)
+
+    if cached_prompts is not None:
+        cached_count = len(cached_prompts)
+        if cached_count >= num_prompts:
+            # Cache hit - use cached prompts
+            print(
+                f"[Cache] Hit! Using {num_prompts} cached prompts from {cache_path} (cache has {cached_count})",
+                flush=True,
             )
-            input_lens[i] += chat_template_len
-
-        input_requests.append((prompt, int(prefix_len + input_lens[i]), int(output_lens[i]), None))
-
-    return input_requests
+            return cached_prompts[:num_prompts]
+        else:
+            # Partial cache - incremental generation
+            need_more = num_prompts - cached_count
+            print(
+                f"[Cache] Partial hit. Cache has {cached_count}, need {num_prompts}. Generating {need_more} more...",
+                flush=True,
+            )
+            new_prompts = _generate_random_prompts(
+                num_to_generate=need_more,
+                prefix_len=prefix_len,
+                input_len=input_len,
+                output_len=output_len,
+                range_ratio=range_ratio,
+                tokenizer=tokenizer,
+                use_chat_template=use_chat_template,
+                start_offset=cached_count,  # Ensure unique prompts
+            )
+            all_prompts = cached_prompts + new_prompts
+            _save_prompt_cache(cache_path, all_prompts, input_len, output_len, range_ratio)
+            return all_prompts[:num_prompts]
+    else:
+        # No cache - full generation
+        print(f"[Cache] Miss. Generating {num_prompts} prompts...", flush=True)
+        prompts = _generate_random_prompts(
+            num_to_generate=num_prompts,
+            prefix_len=prefix_len,
+            input_len=input_len,
+            output_len=output_len,
+            range_ratio=range_ratio,
+            tokenizer=tokenizer,
+            use_chat_template=use_chat_template,
+            start_offset=0,
+        )
+        _save_prompt_cache(cache_path, prompts, input_len, output_len, range_ratio)
+        return prompts
 
 
 async def get_request(
@@ -492,7 +630,7 @@ def calculate_metrics(
 
     if completed == 0:
         warnings.warn(
-            "All requests failed. This is likely due to a misconfiguration " "on the benchmark arguments.",
+            "All requests failed. This is likely due to a misconfiguration on the benchmark arguments.",
             stacklevel=2,
         )
     metrics = BenchmarkMetrics(
@@ -616,11 +754,57 @@ async def benchmark(
     #                 if max_concurrency else contextlib.nullcontext())
     semaphore = asyncio.Semaphore(max_concurrency) if max_concurrency else None
 
+    # Progress tracking for disable_tqdm mode
+    total_requests = len(input_requests)
+    sent_count = 0
+    completed_count = 0
+    failed_count = 0
+    active_count = 0  # Requests currently executing (acquired semaphore)
+    progress_lock = asyncio.Lock()
+    last_progress_time = time.time()
+    PROGRESS_INTERVAL = 10  # Print progress every 10 seconds
+
+    async def print_progress(force=False):
+        nonlocal last_progress_time
+        current_time = time.time()
+        if force or (disable_tqdm and current_time - last_progress_time >= PROGRESS_INTERVAL):
+            elapsed = current_time - benchmark_start_time if "benchmark_start_time" in dir() else 0
+            queued = sent_count - completed_count - failed_count - active_count
+            print(
+                f"[Progress] Completed: {completed_count}/{total_requests}, "
+                f"Failed: {failed_count}, "
+                f"Active: {active_count}, "
+                f"Queued: {queued}, "
+                f"Elapsed: {elapsed:.1f}s",
+                flush=True,
+            )
+            last_progress_time = current_time
+
     async def limited_request_func(request_func_input, pbar):
+        nonlocal completed_count, failed_count, active_count
         if semaphore is None:
-            return await request_func(request_func_input=request_func_input, pbar=pbar)
-        async with semaphore:
-            return await request_func(request_func_input=request_func_input, pbar=pbar)
+            async with progress_lock:
+                active_count += 1
+            result = await request_func(request_func_input=request_func_input, pbar=pbar)
+            async with progress_lock:
+                active_count -= 1
+        else:
+            async with semaphore:
+                async with progress_lock:
+                    active_count += 1
+                result = await request_func(request_func_input=request_func_input, pbar=pbar)
+                async with progress_lock:
+                    active_count -= 1
+
+        # Update progress counter
+        async with progress_lock:
+            if result.success:
+                completed_count += 1
+            else:
+                failed_count += 1
+            await print_progress()
+
+        return result
 
     benchmark_start_time = time.perf_counter()
     tasks: list[asyncio.Task] = []
@@ -644,7 +828,23 @@ async def benchmark(
             ignore_eos=ignore_eos,
         )
         tasks.append(asyncio.create_task(limited_request_func(request_func_input=request_func_input, pbar=pbar)))
+        sent_count += 1
+        # Print progress when sending requests (every 10 seconds or every 500 requests)
+        if disable_tqdm and (sent_count % 500 == 0):
+            print(f"[Sending] {sent_count}/{total_requests} requests sent...", flush=True)
+
+    if disable_tqdm:
+        print(f"[Sending] All {sent_count} requests sent. Waiting for completions...", flush=True)
+
     outputs: list[RequestFuncOutput] = await asyncio.gather(*tasks)
+
+    # Print final progress
+    if disable_tqdm:
+        print(
+            f"[Progress] Final: Completed: {completed_count}/{total_requests}, "
+            f"Failed: {failed_count}, Active: 0, Queued: 0",
+            flush=True,
+        )
 
     if profile:
         print("Stopping profiler...")
@@ -885,9 +1085,9 @@ def main(args: argparse.Namespace):
                 for prompt, prompt_formatted, prompt_len, output_len, _ in input_requests
             ]
         else:
-            assert (
-                tokenizer.chat_template or tokenizer.default_chat_template
-            ), "Tokenizer/model must have chat template for sonnet dataset."
+            assert tokenizer.chat_template or tokenizer.default_chat_template, (
+                "Tokenizer/model must have chat template for sonnet dataset."
+            )
             input_requests = sample_sonnet_requests(
                 dataset_path=args.dataset_path,
                 num_requests=args.num_prompts,
@@ -1026,7 +1226,7 @@ if __name__ == "__main__":
         "--dataset",
         type=str,
         default=None,
-        help="Path to the ShareGPT dataset, will be deprecated in the " "next release.",
+        help="Path to the ShareGPT dataset, will be deprecated in the next release.",
     )
     parser.add_argument(
         "--dataset-name",
@@ -1039,7 +1239,7 @@ if __name__ == "__main__":
         "--dataset-path",
         type=str,
         default=None,
-        help="Path to the sharegpt/sonnet dataset. " "Or the huggingface dataset ID if using HF dataset.",
+        help="Path to the sharegpt/sonnet dataset. Or the huggingface dataset ID if using HF dataset.",
     )
     parser.add_argument(
         "--max-concurrency",
@@ -1070,7 +1270,7 @@ if __name__ == "__main__":
         "--best-of",
         type=int,
         default=1,
-        help="Generates `best_of` sequences per prompt and " "returns the best one.",
+        help="Generates `best_of` sequences per prompt and returns the best one.",
     )
     parser.add_argument("--use-beam-search", action="store_true")
     parser.add_argument(
@@ -1126,7 +1326,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--profile",
         action="store_true",
-        help="Use Torch Profiler. The endpoint must be launched with " "VLLM_TORCH_PROFILER_DIR to enable profiler.",
+        help="Use Torch Profiler. The endpoint must be launched with VLLM_TORCH_PROFILER_DIR to enable profiler.",
     )
     parser.add_argument(
         "--save-result",
@@ -1220,7 +1420,7 @@ if __name__ == "__main__":
         "--sharegpt-output-len",
         type=int,
         default=None,
-        help="Output length for each request. Overrides the output length " "from the ShareGPT dataset.",
+        help="Output length for each request. Overrides the output length from the ShareGPT dataset.",
     )
 
     random_group = parser.add_argument_group("random dataset options")
@@ -1240,7 +1440,7 @@ if __name__ == "__main__":
         "--random-range-ratio",
         type=float,
         default=1.0,
-        help="Range of sampled ratio of input/output length, " "used only for random sampling.",
+        help="Range of sampled ratio of input/output length, used only for random sampling.",
     )
     random_group.add_argument(
         "--random-prefix-len",
@@ -1264,7 +1464,7 @@ if __name__ == "__main__":
         "--hf-output-len",
         type=int,
         default=None,
-        help="Output length for each request. Overrides the output lengths " "from the sampled HF dataset.",
+        help="Output length for each request. Overrides the output lengths from the sampled HF dataset.",
     )
 
     parser.add_argument(

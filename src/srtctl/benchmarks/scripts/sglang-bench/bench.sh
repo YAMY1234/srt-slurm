@@ -19,12 +19,11 @@ ISL=$2
 OSL=$3
 CONCURRENCIES=$4
 REQ_RATE=${5:-inf}
+MODEL_NAME=${6:-${BENCH_MODEL_NAME:-deepseek-ai/DeepSeek-R1}}
 
 # Parse endpoint into host:port
 HOST=$(echo "$ENDPOINT" | sed 's|http://||' | cut -d: -f1)
 PORT=$(echo "$ENDPOINT" | sed 's|http://||' | cut -d: -f2 | cut -d/ -f1)
-
-MODEL_NAME="${BENCH_MODEL_NAME:-deepseek-ai/DeepSeek-R1}"
 
 echo "SGLang-Bench Config: endpoint=${ENDPOINT}; isl=${ISL}; osl=${OSL}; concurrencies=${CONCURRENCIES}; req_rate=${REQ_RATE}"
 

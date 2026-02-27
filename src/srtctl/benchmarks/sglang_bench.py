@@ -98,4 +98,5 @@ class SGLangBenchRunner(BenchmarkRunner):
             str(b.osl),
             str(concurrencies),
             str(b.req_rate) if b.req_rate is not None else "inf",
+            config.served_model_name,
         ]
