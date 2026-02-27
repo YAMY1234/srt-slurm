@@ -25,6 +25,9 @@ class GSM8KRunner(BenchmarkRunner):
         - benchmark.max_tokens: Max tokens per response (default: 16384)
         - benchmark.num_threads: Concurrent threads (default: 512)
         - benchmark.num_shots: Few-shot examples (default: 5)
+        - benchmark.temperature: Sampling temperature (default: server default)
+        - benchmark.top_p: Nucleus sampling threshold (default: server default)
+        - benchmark.top_k: Top-k sampling (default: server default)
     """
 
     @property
@@ -58,5 +61,8 @@ class GSM8KRunner(BenchmarkRunner):
             str(b.max_tokens or 16384),
             str(b.num_threads or 512),
             str(b.num_shots or 5),
+            str(b.temperature) if b.temperature is not None else "",
+            str(b.top_p) if b.top_p is not None else "",
+            str(b.top_k) if b.top_k is not None else "",
         ]
 
