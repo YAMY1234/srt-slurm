@@ -41,5 +41,9 @@ echo "Installing sgl-kernel 0.3.21..."
 pip install https://github.com/sgl-project/whl/releases/download/v0.3.21/sgl_kernel-0.3.21+cu130-cp310-abi3-manylinux2014_aarch64.whl --force-reinstall $PIP_ARGS
 echo "sgl-kernel 0.3.21 installed"
 
+# Install cutlass-dsl 4.3.4
+pip uninstall -y nvidia-cutlass-dsl-libs-base $PIP_ARGS 2>/dev/null || true
+pip install nvidia-cutlass-dsl==4.3.4 $PIP_ARGS --force-reinstall
+
 echo "=== GB300 Setup complete ==="
 
