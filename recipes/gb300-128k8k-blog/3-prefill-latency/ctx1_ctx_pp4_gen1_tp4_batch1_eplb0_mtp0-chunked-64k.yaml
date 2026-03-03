@@ -82,7 +82,6 @@ backend:
       mem-fraction-static: 0.85
       max-running-requests: 2
       model-path: /model/
-      # moe-dense-tp-size: 1
       moe-runner-backend: flashinfer_trtllm
       pipeline-parallel-size: 1
       prefill-round-robin-balance: true
@@ -106,11 +105,9 @@ backend:
       expert-parallel-size: 1
       kv-cache-dtype: fp8_e4m3
       load-balance-method: round_robin
-      # max-total-tokens: 544000
       mem-fraction-static: 0.72
       max-running-requests: 2
       model-path: /model/
-      # moe-dense-tp-size: 1
       moe-runner-backend: flashinfer_trtllm
       pipeline-parallel-size: 4
       quantization: modelopt_fp4
@@ -120,9 +117,6 @@ backend:
       tensor-parallel-size: 1
       trust-remote-code: true
       watchdog-timeout: 1000000
-
-extra_mount:
-  - "/lustre/fsw/coreai_comparch_trtllm/yangminl/sglang:/sgl-workspace/sglang"
 
 benchmark:
   concurrencies: "2x2"

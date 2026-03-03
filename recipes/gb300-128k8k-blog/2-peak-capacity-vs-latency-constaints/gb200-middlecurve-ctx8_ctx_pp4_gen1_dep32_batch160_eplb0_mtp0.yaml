@@ -1,7 +1,5 @@
 # Config: ctx8_ctx_pp4_gen1_dep32_batch160_eplb0_mtp0
-# Tuned from 801971-ctx8_ctx_pp4_gen1_dep32_batch8_eplb0_mtp0 with larger bs (160)
 # max global bs: 160, concurrency: 512
-# GB200 tune
 
 name: "gb200-fp4-128k8k-ctx8_ctx_pp4_gen1_dep32_batch160_eplb0_mtp0"
 
@@ -83,8 +81,8 @@ backend:
       enable-symm-mem: true
       expert-parallel-size: 32
       kv-cache-dtype: fp8_e4m3
-      max-running-requests: 160  # Increased from 128
-      mem-fraction-static: 0.72  # Reduced for GB200
+      max-running-requests: 160
+      mem-fraction-static: 0.72
       model-path: /model/
       moe-dense-tp-size: 1
       moe-runner-backend: flashinfer_cutedsl
@@ -112,13 +110,11 @@ backend:
       disaggregation-bootstrap-port: 30001
       disaggregation-mode: prefill
       disaggregation-transfer-backend: nixl
-      # enable-symm-mem: true
       expert-parallel-size: 1
       kv-cache-dtype: fp8_e4m3
       load-balance-method: round_robin
-      # max-total-tokens: 544000
       max-running-requests: 32
-      mem-fraction-static: 0.68  # Reduced for GB200
+      mem-fraction-static: 0.68
       model-path: /model/
       moe-dense-tp-size: 1
       moe-runner-backend: flashinfer_trtllm
@@ -130,9 +126,6 @@ backend:
       tensor-parallel-size: 1
       trust-remote-code: true
       watchdog-timeout: 1000000
-
-extra_mount:
-  - "/lustre/fsw/coreai_comparch_trtllm/yangminl/sglang:/sgl-workspace/sglang"
 
 benchmark:
   concurrencies: "512"

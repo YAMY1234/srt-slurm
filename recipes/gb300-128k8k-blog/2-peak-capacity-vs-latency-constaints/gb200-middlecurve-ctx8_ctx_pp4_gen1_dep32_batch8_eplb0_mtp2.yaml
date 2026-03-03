@@ -1,5 +1,4 @@
 # Config: ctx8_ctx_pp4_gen1_dep32_batch8_eplb0_mtp2
-# From GB200 TRTLLM RM results
 # max global bs: 256, concurrency: 512
 
 name: "gb200-fp4-128k8k-ctx8_ctx_pp4_gen1_dep32_batch8_eplb0_mtp2"
@@ -36,7 +35,7 @@ backend:
     SGLANG_MOONCAKE_CUSTOM_MEM_POOL: "True"
     SGLANG_USE_MESSAGE_QUEUE_BROADCASTER: "0"
     SGLANG_DISABLE_TP_MEMORY_INBALANCE_CHECK: "1"
-    SGLANG_DEEPEP_NUM_MAX_DISPATCH_TOKENS_PER_RANK: "1024"  # DeepEP low_latency mode hard limit
+    SGLANG_DEEPEP_NUM_MAX_DISPATCH_TOKENS_PER_RANK: "1024"
     SGLANG_MOE_NVFP4_DISPATCH: "1"
     SGLANG_NVFP4_CKPT_FP8_NEXTN_MOE: "1"
     SGLANG_FLASHINFER_FP4_GEMM_BACKEND: "cutlass"
@@ -88,7 +87,7 @@ backend:
       expert-parallel-size: 32
       kv-cache-dtype: fp8_e4m3
       max-running-requests: 256
-      mem-fraction-static: 0.70  # Reduced for MTP draft model memory on GB200
+      mem-fraction-static: 0.70
       model-path: /model/
       moe-dense-tp-size: 1
       moe-runner-backend: flashinfer_cutedsl
@@ -124,13 +123,11 @@ backend:
       disaggregation-bootstrap-port: 30001
       disaggregation-mode: prefill
       disaggregation-transfer-backend: nixl
-      # enable-symm-mem: true
       expert-parallel-size: 1
       kv-cache-dtype: fp8_e4m3
       load-balance-method: round_robin
-      # max-total-tokens: 544000
       max-running-requests: 32
-      mem-fraction-static: 0.68  # Reduced for GB200
+      mem-fraction-static: 0.68
       model-path: /model/
       moe-dense-tp-size: 1
       moe-runner-backend: flashinfer_trtllm
@@ -142,9 +139,6 @@ backend:
       tensor-parallel-size: 1
       trust-remote-code: true
       watchdog-timeout: 1000000
-
-extra_mount:
-  - "/lustre/fsw/coreai_comparch_trtllm/yangminl/sglang:/sgl-workspace/sglang"
 
 benchmark:
   concurrencies: "512"
