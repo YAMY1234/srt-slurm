@@ -206,8 +206,11 @@ def generate_minimal_sbatch_script(
 
     job_name = get_job_name(config)
 
-    # Extract recipe name from config path for output directory naming
-    recipe_name = config_path.stem if config_path else "unknown"
+    # Extract recipe name for output directory naming ({job_id}-{recipe_name}).
+    # Use filename stem normally; fall back to config.name when the path is a
+    # temp file (e.g. sweep flow generates "srtctl_sweep_*" temp configs).
+    path_stem = config_path.stem if config_path else ""
+    recipe_name = (config.name or "unknown") if (path_stem.startswith("srtctl_sweep_") or not path_stem) else path_stem
 
     rendered = template.render(
         job_name=job_name,
