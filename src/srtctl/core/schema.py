@@ -526,6 +526,10 @@ class BenchmarkConfig:
     num_threads: int | None = None
     max_context_length: int | None = None
     categories: list[str] | None = None
+    num_shots: int | None = None  # GSM8K few-shot examples
+    temperature: float | None = None
+    top_p: float | None = None
+    top_k: int | None = None
     # Router benchmark fields
     num_requests: int | None = None
     concurrency: int | None = None
@@ -534,6 +538,7 @@ class BenchmarkConfig:
     mooncake_workload: str | None = None  # "mooncake", "conversation", "synthetic", "toolagent"
     ttft_threshold_ms: int | None = None  # Goodput TTFT threshold in ms (default: 2000)
     itl_threshold_ms: int | None = None  # Goodput ITL threshold in ms (default: 25)
+    random_range_ratio: float | None = None  # Random input/output length range ratio (default: 0.8)
 
     def get_concurrency_list(self) -> list[int]:
         if self.concurrencies is None:
@@ -716,12 +721,13 @@ class DynamoConfig:
 
         return (
             f"echo 'Installing dynamo from source ({git_ref})...' && "
+            "apt-get update -qq && apt-get install -y -qq libclang-dev > /dev/null 2>&1 && "
             "cd /sgl-workspace/ && "
             "git clone https://github.com/ai-dynamo/dynamo.git && "
             "cd dynamo && "
             f"{checkout_cmd + ' && ' if checkout_cmd else ''}"
             "cd lib/bindings/python/ && "
-            'export RUSTFLAGS="${RUSTFLAGS:-} -C target-cpu=native" && '
+            'export RUSTFLAGS="${RUSTFLAGS:-} -C target-cpu=native --cfg tokio_unstable" && '
             "maturin build -o /tmp && "
             "pip install /tmp/ai_dynamo_runtime*.whl && "
             "cd /sgl-workspace/dynamo/ && "
