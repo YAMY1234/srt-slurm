@@ -78,7 +78,7 @@ class BenchmarkStageMixin:
         hc = self.config.health_check
         if not wait_for_model(
             host=self.runtime.nodes.head,
-            port=8000,
+            port=self.runtime.frontend_port,
             n_prefill=n_prefill,
             n_decode=n_decode,
             poll_interval=float(hc.interval_seconds),

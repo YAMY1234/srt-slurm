@@ -85,7 +85,7 @@ class NodePortAllocator:
         if node not in self._http_ports:
             self._http_ports[node] = self.base_http_port + self.port_offset
         port = self._http_ports[node]
-        self._http_ports[node] += 1000
+        self._http_ports[node] += 1
         return port
 
     def next_bootstrap_port(self, node: str) -> int:
@@ -107,7 +107,7 @@ class NodePortAllocator:
     def next_nixl_port(self) -> int:
         """Get next available NIXL side channel port (globally unique across all nodes)."""
         if self._next_nixl_port == 0:
-            self._next_nixl_port = self.base_nixl_port
+            self._next_nixl_port = self.base_nixl_port + self.port_offset
         port = self._next_nixl_port
         self._next_nixl_port += 1
         return port

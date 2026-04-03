@@ -245,6 +245,9 @@ class WorkerStageMixin:
         )
 
         # Environment variables
+        # TODO: port-offset is only applied in start_worker() (SGLang path).
+        # This MPI-style path (TRTLLM) still uses hardcoded NATS/etcd ports.
+        # If TRTLLM needs port-offset support, mirror the dynamo env logic from start_worker().
         env_to_set = {
             "HEAD_NODE_IP": self.runtime.head_node_ip,
             "ETCD_ENDPOINTS": f"http://{self.runtime.nodes.infra}:2379",

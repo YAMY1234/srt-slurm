@@ -154,8 +154,8 @@ def start_nats(binary_path: str = "/configs/nats-server", port: int = 4222) -> s
     if not os.path.exists(binary_path):
         raise FileNotFoundError(f"NATS binary not found: {binary_path}")
 
-    # Use /tmp for JetStream storage - avoids "Temporary storage directory" warning
-    # and ensures we're using fast local storage
+    # Use /tmp for JetStream storage - container-local fast storage.
+    # Each SLURM job runs in its own container, so /tmp is isolated per job.
     if os.path.exists("/tmp/nats"):
         shutil.rmtree("/tmp/nats")
     nats_store_dir = "/tmp/nats"
@@ -198,8 +198,8 @@ def start_etcd(
 
     logger.info("Starting etcd server on client port %d, peer port %d...", client_port, peer_port)
 
-    # Use unique data directory per job to avoid conflicts between concurrent jobs
-    # Data dir is inside log_dir if available, otherwise use /tmp with job_id
+    # Determine etcd data directory. Prefer log_dir so data lives alongside logs
+    # for easier debugging; fall back to /tmp (container-local fast storage).
     if log_dir:
         data_dir = log_dir / "etcd-data"
     elif job_id:
@@ -207,16 +207,11 @@ def start_etcd(
     else:
         data_dir = Path(f"/tmp/etcd-{client_port}")
 
+    if data_dir.exists():
+        shutil.rmtree(data_dir)
     data_dir.mkdir(parents=True, exist_ok=True)
-    logger.info("etcd data directory: %s", data_dir)
-
-    # Use /tmp for etcd data directory - this is typically on fast local storage
-    # (often tmpfs on HPC systems). Without this, etcd uses "default.etcd" in CWD
-    # which may be on slow network storage, causing Raft consensus timeouts.
-    if os.path.exists("/tmp/etcd"):
-        shutil.rmtree("/tmp/etcd")
-    etcd_data_dir = "/tmp/etcd"
-    os.makedirs(etcd_data_dir, exist_ok=True)
+    etcd_data_dir = str(data_dir)
+    logger.info("etcd data directory: %s", etcd_data_dir)
 
     cmd = [
         binary_path,

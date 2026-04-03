@@ -16,7 +16,7 @@ import os
 import shlex
 import socket
 import subprocess
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 
 from .ip_utils import get_node_ip
@@ -174,7 +174,7 @@ def start_srun_process(
     nodelist: Sequence[str] | None = None,
     output: str | None = None,
     container_image: str | None = None,
-    container_mounts: dict[Path, Path] | None = None,
+    container_mounts: Mapping[Path | str, Path | str] | None = None,
     env_to_pass_through: list[str] | None = None,
     env_to_set: dict[str, str] | None = None,
     bash_preamble: str | None = None,
