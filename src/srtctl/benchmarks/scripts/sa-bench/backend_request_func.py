@@ -511,6 +511,21 @@ def get_model(pretrained_model_name_or_path: str) -> str:
     return pretrained_model_name_or_path
 
 
+def _resolve_tokenizer_file(model_name_or_path):
+    """Resolve tokenizer.json from a local directory or HF hub cache."""
+    from pathlib import Path
+
+    local_path = Path(model_name_or_path) / "tokenizer.json"
+    if local_path.is_file():
+        return str(local_path)
+    try:
+        from huggingface_hub import hf_hub_download
+
+        return hf_hub_download(model_name_or_path, "tokenizer.json", local_files_only=True)
+    except Exception:
+        return None
+
+
 def _fix_v5_tokenizer_components(tokenizer, model_name_or_path):
     """Fix pre_tokenizer/decoder when transformers v5 LlamaTokenizerFast overwrites them.
 
@@ -526,11 +541,10 @@ def _fix_v5_tokenizer_components(tokenizer, model_name_or_path):
         return
 
     try:
-        from pathlib import Path
         from tokenizers import Tokenizer as RawTokenizer
 
-        tok_file = str(Path(model_name_or_path) / "tokenizer.json")
-        if not os.path.isfile(tok_file):
+        tok_file = _resolve_tokenizer_file(model_name_or_path)
+        if tok_file is None:
             return
         raw = RawTokenizer.from_file(tok_file)
     except Exception:
