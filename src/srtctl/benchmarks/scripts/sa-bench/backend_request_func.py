@@ -511,6 +511,46 @@ def get_model(pretrained_model_name_or_path: str) -> str:
     return pretrained_model_name_or_path
 
 
+def _fix_v5_tokenizer_components(tokenizer, model_name_or_path):
+    """Fix pre_tokenizer/decoder when transformers v5 LlamaTokenizerFast overwrites them.
+
+    In transformers v5, LlamaTokenizerFast.__init__ rebuilds the pre_tokenizer
+    and decoder from scratch, discarding the originals from tokenizer.json.
+    This breaks models like DeepSeek-R1 that declare LlamaTokenizerFast but
+    actually use a ByteLevel pre_tokenizer.
+
+    Ported from sglang/python/sglang/srt/utils/hf_transformers_utils.py.
+    """
+    backend = getattr(tokenizer, "_tokenizer", None)
+    if backend is None:
+        return
+
+    try:
+        from pathlib import Path
+        from tokenizers import Tokenizer as RawTokenizer
+
+        tok_file = str(Path(model_name_or_path) / "tokenizer.json")
+        if not os.path.isfile(tok_file):
+            return
+        raw = RawTokenizer.from_file(tok_file)
+    except Exception:
+        return
+
+    raw_pre = type(raw.pre_tokenizer).__name__ if raw.pre_tokenizer else None
+    loaded_pre = type(backend.pre_tokenizer).__name__ if backend.pre_tokenizer else None
+
+    if raw_pre and loaded_pre and raw_pre != loaded_pre:
+        print(
+            f"[sa-bench] Fixing v5 tokenizer component mismatch for {model_name_or_path}: "
+            f"pre_tokenizer {loaded_pre} -> {raw_pre}, "
+            f"decoder {type(backend.decoder).__name__ if backend.decoder else None} "
+            f"-> {type(raw.decoder).__name__ if raw.decoder else None}",
+            flush=True,
+        )
+        backend.pre_tokenizer = raw.pre_tokenizer
+        backend.decoder = raw.decoder
+
+
 def get_tokenizer(
     pretrained_model_name_or_path: str,
     tokenizer_mode: str = "auto",
@@ -534,11 +574,13 @@ def get_tokenizer(
             ) from e
         return MistralTokenizer.from_pretrained(str(pretrained_model_name_or_path))
     else:
-        return AutoTokenizer.from_pretrained(
+        tokenizer = AutoTokenizer.from_pretrained(
             pretrained_model_name_or_path,
             trust_remote_code=trust_remote_code,
             **kwargs,
         )
+        _fix_v5_tokenizer_components(tokenizer, pretrained_model_name_or_path)
+        return tokenizer
 
 
 ASYNC_REQUEST_FUNCS = {
