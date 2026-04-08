@@ -1,33 +1,33 @@
 #!/bin/bash
 # ============================================================================
-# Docker 镜像下载脚本 - 通过 SLURM 计算节点运行 enroot import
+# Docker Image Download Script - Run enroot import via SLURM compute node
 # ============================================================================
-# 用法: ./download_container.sh <docker_image> [output_name]
+# Usage: ./download_container.sh <docker_image> [output_name]
 #
-# 示例:
+# Examples:
 #   ./download_container.sh lmsysorg/sglang:dev
 #   ./download_container.sh lmsysorg/sglang:v0.5.7
 #   ./download_container.sh lmsysorg/sglang:v0.5.7 sglang-v0.5.7
 #
-# 输出: /lustre/fsw/coreai_comparch_trtllm/yangminl/containers/<name>.sqsh
+# Output: /lustre/fsw/coreai_comparch_trtllm/yangminl/containers/<name>.sqsh
 # ============================================================================
 
 set -e
 
-# 配置
+# Configuration
 ACCOUNT="coreai_comparch_trtllm"
-PARTITION="gb200-backfill"  # 可改成 gb300-backfill
+PARTITION="gb200-backfill"  # Can be changed to gb300-backfill
 TIME_LIMIT="02:00:00"
 OUTPUT_DIR="/lustre/fsw/coreai_comparch_trtllm/yangminl/containers"
 LOG_DIR="/lustre/fsw/coreai_comparch_trtllm/yangminl/logs"
 
-# 检查参数
+# Check arguments
 if [ -z "$1" ]; then
-    echo "❌ 错误: 请提供 Docker 镜像名称"
+    echo "Error: Please provide a Docker image name"
     echo ""
-    echo "用法: $0 <docker_image> [output_name]"
+    echo "Usage: $0 <docker_image> [output_name]"
     echo ""
-    echo "示例:"
+    echo "Examples:"
     echo "  $0 lmsysorg/sglang:dev"
     echo "  $0 lmsysorg/sglang:v0.5.7"
     echo "  $0 lmsysorg/sglang:v0.5.7 sglang-v0.5.7"
@@ -36,39 +36,39 @@ fi
 
 DOCKER_IMAGE="$1"
 
-# 生成输出文件名
+# Generate output filename
 if [ -n "$2" ]; then
     OUTPUT_NAME="$2"
 else
-    # 自动从 docker 镜像名生成: lmsysorg/sglang:v0.5.7 -> lmsysorg+sglang+v0.5.7
+    # Auto-generate from docker image name: lmsysorg/sglang:v0.5.7 -> lmsysorg+sglang+v0.5.7
     OUTPUT_NAME=$(echo "$DOCKER_IMAGE" | tr '/:' '+')
 fi
 
 OUTPUT_FILE="${OUTPUT_DIR}/${OUTPUT_NAME}.sqsh"
 
-# 创建输出目录
+# Create output directories
 mkdir -p "$OUTPUT_DIR" "$LOG_DIR"
 
 echo "============================================"
-echo "🐳 Docker 镜像下载工具"
+echo "Docker Image Download Tool"
 echo "============================================"
-echo "镜像: $DOCKER_IMAGE"
-echo "输出: $OUTPUT_FILE"
-echo "分区: $PARTITION"
+echo "Image:     $DOCKER_IMAGE"
+echo "Output:    $OUTPUT_FILE"
+echo "Partition: $PARTITION"
 echo "============================================"
 
-# 检查文件是否已存在
+# Check if file already exists
 if [ -f "$OUTPUT_FILE" ]; then
-    echo "⚠️  警告: 文件已存在: $OUTPUT_FILE"
-    read -p "是否覆盖? (y/N) " -n 1 -r
+    echo "WARNING: File already exists: $OUTPUT_FILE"
+    read -p "Overwrite? (y/N) " -n 1 -r
     echo
     if [[ ! $REPLY =~ ^[Yy]$ ]]; then
-        echo "已取消"
+        echo "Cancelled"
         exit 0
     fi
 fi
 
-# 创建临时 SLURM 脚本
+# Create temporary SLURM script
 TEMP_SCRIPT=$(mktemp /tmp/enroot_import_XXXXXX.sh)
 
 cat > "$TEMP_SCRIPT" << EOF
@@ -82,31 +82,31 @@ cat > "$TEMP_SCRIPT" << EOF
 #SBATCH --output=${LOG_DIR}/enroot_import_%j.log
 
 echo "============================================"
-echo "🐳 开始导入 Docker 镜像"
+echo "Starting Docker image import"
 echo "============================================"
-echo "镜像: ${DOCKER_IMAGE}"
-echo "输出: ${OUTPUT_FILE}"
-echo "节点: \$(hostname)"
-echo "时间: \$(date)"
+echo "Image:  ${DOCKER_IMAGE}"
+echo "Output: ${OUTPUT_FILE}"
+echo "Node:   \$(hostname)"
+echo "Time:   \$(date)"
 echo "============================================"
 
-# 删除旧文件（如果存在）
+# Remove old file if it exists
 rm -f "${OUTPUT_FILE}"
 
-# 运行 enroot import
+# Run enroot import
 echo ""
-echo "📥 正在下载并转换镜像..."
+echo "Downloading and converting image..."
 enroot import -o "${OUTPUT_FILE}" docker://${DOCKER_IMAGE}
 
-# 检查结果
+# Check result
 if [ -f "${OUTPUT_FILE}" ]; then
     echo ""
     echo "============================================"
-    echo "✅ 导入成功！"
+    echo "Import successful!"
     echo "============================================"
     ls -lh "${OUTPUT_FILE}"
     echo ""
-    echo "📝 在 srtslurm.yaml 中添加:"
+    echo "Add to srtslurm.yaml:"
     echo ""
     echo "containers:"
     echo "  ${OUTPUT_NAME}: \"${OUTPUT_FILE}\""
@@ -114,34 +114,34 @@ if [ -f "${OUTPUT_FILE}" ]; then
 else
     echo ""
     echo "============================================"
-    echo "❌ 导入失败！"
+    echo "Import failed!"
     echo "============================================"
     exit 1
 fi
 
-echo "完成时间: \$(date)"
+echo "Completed at: \$(date)"
 EOF
 
-# 提交作业
+# Submit job
 echo ""
-echo "📤 提交 SLURM 作业..."
+echo "Submitting SLURM job..."
 JOB_ID=$(sbatch --parsable "$TEMP_SCRIPT")
 
-# 清理临时文件
+# Clean up temporary file
 rm -f "$TEMP_SCRIPT"
 
 echo ""
 echo "============================================"
-echo "✅ 作业已提交！"
+echo "Job submitted!"
 echo "============================================"
 echo "Job ID: $JOB_ID"
 echo ""
-echo "📊 查看状态:"
+echo "Check status:"
 echo "  squeue -j $JOB_ID"
 echo ""
-echo "📋 查看日志:"
+echo "View log:"
 echo "  tail -f ${LOG_DIR}/enroot_import_${JOB_ID}.log"
 echo ""
-echo "📁 完成后检查文件:"
+echo "Check output file after completion:"
 echo "  ls -lh ${OUTPUT_FILE}"
 echo "============================================"

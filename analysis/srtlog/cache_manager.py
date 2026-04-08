@@ -5,11 +5,8 @@ Provides efficient disk-based caching to avoid re-parsing log files and JSON dat
 every time the Streamlit app loads.
 """
 
-import hashlib
-import json
 import logging
 from pathlib import Path
-from typing import Any
 
 import pandas as pd
 
@@ -29,122 +26,90 @@ class CacheManager:
         self.cache_dir = self.run_dir / "cached_assets"
         self.cache_dir.mkdir(exist_ok=True)
 
-        self.metadata_file = self.cache_dir / "cache_metadata.json"
+    def is_cache_valid(
+        self, cache_name: str, source_patterns: list[str] | None = None, sentinel: str | None = None
+    ) -> bool:
+        """Check if cached parquet is up-to-date.
 
-    def _get_file_hash(self, file_path: Path) -> str:
-        """Get hash of file contents for cache validation.
-
-        Args:
-            file_path: Path to file
-
-        Returns:
-            MD5 hash of file contents
-        """
-        if not file_path.exists():
-            return ""
-
-        hash_md5 = hashlib.md5()
-        with open(file_path, "rb") as f:
-            # Read in chunks for large files
-            for chunk in iter(lambda: f.read(4096), b""):
-                hash_md5.update(chunk)
-        return hash_md5.hexdigest()
-
-    def _get_files_hash(self, file_patterns: list[str]) -> dict[str, str]:
-        """Get hashes for multiple files matching patterns.
+        Validation strategy (one stat() each, no file content reads):
+        - parquet must exist
+        - If a sentinel file is given (e.g. "logs/benchmark.out"), compare its
+          current size against the size recorded when the cache was written.
+          A size change means the job produced more results → cache stale.
+        - If no sentinel, existence alone is sufficient (immutable data).
 
         Args:
-            file_patterns: List of glob patterns (e.g., ["*.err", "*.json"])
-
-        Returns:
-            Dictionary mapping file paths to their hashes
-        """
-        hashes = {}
-        for pattern in file_patterns:
-            for file_path in self.run_dir.glob(pattern):
-                if file_path.is_file():
-                    hashes[str(file_path.relative_to(self.run_dir))] = self._get_file_hash(file_path)
-        return hashes
-
-    def _load_metadata(self) -> dict[str, Any]:
-        """Load cache metadata from disk.
-
-        Returns:
-            Metadata dictionary, or empty dict if doesn't exist
-        """
-        if not self.metadata_file.exists():
-            return {}
-
-        try:
-            with open(self.metadata_file) as f:
-                return json.load(f)
-        except (json.JSONDecodeError, OSError):
-            return {}
-
-    def _save_metadata(self, metadata: dict[str, Any]) -> None:
-        """Save cache metadata to disk.
-
-        Args:
-            metadata: Metadata dictionary to save
-        """
-        with open(self.metadata_file, "w") as f:
-            json.dump(metadata, f, indent=2)
-
-    def is_cache_valid(self, cache_name: str, source_patterns: list[str]) -> bool:
-        """Check if cached data is valid (source files haven't changed).
-
-        Args:
-            cache_name: Name of the cache (e.g., "benchmark_run", "node_metrics")
-            source_patterns: Glob patterns for source files (e.g., ["*.json", "vllm_*/"])
-
-        Returns:
-            True if cache is valid, False otherwise
+            cache_name: Name of the cache (e.g., "benchmark_results", "node_metrics")
+            source_patterns: Ignored (kept for API compatibility)
+            sentinel: Optional path relative to run_dir whose file size is
+                      used as a lightweight staleness check.
         """
         cache_file = self.cache_dir / f"{cache_name}.parquet"
         if not cache_file.exists():
             return False
 
-        # Check metadata
-        metadata = self._load_metadata()
-        if cache_name not in metadata:
+        if sentinel is None:
+            return True
+
+        sentinel_path = self.run_dir / sentinel
+        size_file = self.cache_dir / f"{cache_name}.size"
+
+        try:
+            current_size = sentinel_path.stat().st_size
+        except OSError:
+            return True  # sentinel doesn't exist (yet) → cache is fine
+
+        if not size_file.exists():
+            # Legacy cache without size record — trust it and backfill the size
+            # so future checks can detect real changes.
+            try:
+                size_file.write_text(str(current_size))
+            except OSError:
+                pass
+            return True
+
+        try:
+            recorded_size = int(size_file.read_text().strip())
+        except (ValueError, OSError):
             return False
 
-        # Compare file hashes
-        current_hashes = self._get_files_hash(source_patterns)
-        cached_hashes = metadata[cache_name].get("source_hashes", {})
+        return current_size == recorded_size
 
-        return current_hashes == cached_hashes
-
-    def save_to_cache(self, cache_name: str, data: pd.DataFrame | list[dict], source_patterns: list[str]) -> None:
+    def save_to_cache(
+        self,
+        cache_name: str,
+        data: pd.DataFrame | list[dict],
+        source_patterns: list[str] | None = None,
+        sentinel: str | None = None,
+    ) -> None:
         """Save data to parquet cache.
 
         Args:
-            cache_name: Name of the cache (e.g., "benchmark_run", "node_metrics")
+            cache_name: Name of the cache (e.g., "benchmark_results", "node_metrics")
             data: Data to cache (DataFrame or list of dicts)
-            source_patterns: Glob patterns for source files
+            source_patterns: Ignored (kept for API compatibility)
+            sentinel: Optional path relative to run_dir; its current file size
+                      is recorded for later staleness checks.
         """
-        # Convert to DataFrame if needed
         if isinstance(data, list):
             if not data:
-                # Save empty DataFrame
                 df = pd.DataFrame()
             else:
                 df = pd.DataFrame(data)
         else:
             df = data
 
-        # Save to parquet
         cache_file = self.cache_dir / f"{cache_name}.parquet"
         df.to_parquet(cache_file, index=False, compression="snappy")
 
-        # Update metadata
-        metadata = self._load_metadata()
-        metadata[cache_name] = {
-            "source_hashes": self._get_files_hash(source_patterns),
-            "cached_at": pd.Timestamp.now().isoformat(),
-            "row_count": len(df),
-        }
-        self._save_metadata(metadata)
+        if sentinel:
+            sentinel_path = self.run_dir / sentinel
+            try:
+                size = sentinel_path.stat().st_size
+                size_file = self.cache_dir / f"{cache_name}.size"
+                size_file.write_text(str(size))
+            except OSError:
+                pass
 
         logger.info(f"Cached {len(df)} rows to {cache_file.name}")
 
@@ -176,21 +141,13 @@ class CacheManager:
             cache_name: Specific cache to invalidate, or None to invalidate all
         """
         if cache_name:
-            # Invalidate specific cache
-            cache_file = self.cache_dir / f"{cache_name}.parquet"
-            if cache_file.exists():
-                cache_file.unlink()
-                logger.info(f"Invalidated cache: {cache_name}")
-
-            # Remove from metadata
-            metadata = self._load_metadata()
-            if cache_name in metadata:
-                del metadata[cache_name]
-                self._save_metadata(metadata)
+            for ext in (".parquet", ".size"):
+                f = self.cache_dir / f"{cache_name}{ext}"
+                if f.exists():
+                    f.unlink()
+            logger.info(f"Invalidated cache: {cache_name}")
         else:
-            # Invalidate all caches
-            for cache_file in self.cache_dir.glob("*.parquet"):
-                cache_file.unlink()
-            if self.metadata_file.exists():
-                self.metadata_file.unlink()
+            for f in self.cache_dir.iterdir():
+                if f.suffix in (".parquet", ".size", ".json"):
+                    f.unlink()
             logger.info("Invalidated all caches")

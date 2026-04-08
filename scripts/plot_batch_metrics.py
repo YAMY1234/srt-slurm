@@ -167,7 +167,9 @@ def plot_metrics(
     fig, axes = plt.subplots(n_rows, 2, figsize=(22, 3.5 * n_rows), squeeze=False)
     fig.suptitle(
         f"{title_prefix}Batch Metrics Over Time" if title_prefix else "Batch Metrics Over Time",
-        fontsize=16, fontweight="bold", y=1.0,
+        fontsize=16,
+        fontweight="bold",
+        y=1.0,
     )
 
     colors = plt.cm.tab10.colors
@@ -181,11 +183,11 @@ def plot_metrics(
             if not timestamps or not values:
                 continue
             elapsed = compute_elapsed_seconds(timestamps)
-            valid = [(e, v) for e, v in zip(elapsed, values) if v is not None]
+            valid = [(e, v) for e, v in zip(elapsed, values, strict=False) if v is not None]
             if not valid:
                 continue
             has_data = True
-            es, vs = zip(*valid)
+            es, vs = zip(*valid, strict=False)
             ax.plot(es, vs, color=colors[idx % len(colors)], linewidth=0.8, alpha=0.85, label=label)
 
         ax.set_title(f"Prefill: {metric_name}", fontsize=11, fontweight="bold")
@@ -208,11 +210,11 @@ def plot_metrics(
             if not timestamps or not values:
                 continue
             elapsed = compute_elapsed_seconds(timestamps)
-            valid = [(e, v) for e, v in zip(elapsed, values) if v is not None]
+            valid = [(e, v) for e, v in zip(elapsed, values, strict=False) if v is not None]
             if not valid:
                 continue
             has_data = True
-            es, vs = zip(*valid)
+            es, vs = zip(*valid, strict=False)
             ax.plot(es, vs, color=colors[idx % len(colors)], linewidth=0.8, alpha=0.85, label=label)
 
         ax.set_title(f"Decode: {metric_name}", fontsize=11, fontweight="bold")
@@ -296,15 +298,21 @@ def main():
 """,
     )
     parser.add_argument(
-        "log_dir", nargs="?", default=None,
+        "log_dir",
+        nargs="?",
+        default=None,
         help="Path to a single logs directory (always force-regenerates)",
     )
     parser.add_argument(
-        "--all", "-a", action="store_true",
+        "--all",
+        "-a",
+        action="store_true",
         help="Process all run directories under outputs/",
     )
     parser.add_argument(
-        "--force", "-f", action="store_true",
+        "--force",
+        "-f",
+        action="store_true",
         help="Force regenerate even if batch_metrics.png already exists (only with --all)",
     )
     parser.add_argument(
@@ -313,52 +321,57 @@ def main():
         help="Path to the outputs directory (default: outputs/)",
     )
     parser.add_argument(
-        "--output", "-o", default=None,
+        "--output",
+        "-o",
+        default=None,
         help="Output image path (only for single-run mode)",
     )
     parser.add_argument(
-        "--downsample", "-d", type=int, default=1,
+        "--downsample",
+        "-d",
+        type=int,
+        default=1,
         help="Downsample factor: keep every Nth data point (useful for large logs)",
     )
     args = parser.parse_args()
 
     if not args.log_dir and not args.all:
         parser.print_help()
-        print("\n错误: 请指定一个 log 目录，或使用 --all 处理所有 outputs", file=sys.stderr)
+        print("\nError: Please specify a log directory, or use --all to process all outputs", file=sys.stderr)
         sys.exit(1)
 
     # --- Single run mode ---
     if args.log_dir:
         log_dir = args.log_dir
         if not os.path.isdir(log_dir):
-            print(f"错误: 目录不存在: {log_dir}", file=sys.stderr)
+            print(f"Error: Directory does not exist: {log_dir}", file=sys.stderr)
             sys.exit(1)
 
         output_path = args.output or os.path.join(log_dir, "batch_metrics.png")
         prefill_files, decode_files = find_log_files(log_dir)
 
         if not prefill_files and not decode_files:
-            print(f"错误: 在 {log_dir} 中未找到 prefill/decode 日志文件", file=sys.stderr)
+            print(f"Error: No prefill/decode log files found in {log_dir}", file=sys.stderr)
             sys.exit(1)
 
-        print(f"找到 {len(prefill_files)} 个 prefill 日志, {len(decode_files)} 个 decode 日志")
+        print(f"Found {len(prefill_files)} prefill log(s), {len(decode_files)} decode log(s)")
         ok = process_single_run(log_dir, args.downsample, output_path)
         if ok:
-            print(f"图表已保存到: {output_path}")
+            print(f"Plot saved to: {output_path}")
         else:
-            print("错误: 没有解析到任何有效的 batch 数据", file=sys.stderr)
+            print("Error: No valid batch data parsed", file=sys.stderr)
             sys.exit(1)
         return
 
     # --- Batch mode (--all) ---
     outputs_dir = args.outputs_dir
     if not os.path.isdir(outputs_dir):
-        print(f"错误: outputs 目录不存在: {outputs_dir}", file=sys.stderr)
+        print(f"Error: Outputs directory does not exist: {outputs_dir}", file=sys.stderr)
         sys.exit(1)
 
     run_dirs = discover_run_dirs(outputs_dir)
     if not run_dirs:
-        print(f"错误: 在 {outputs_dir} 中未找到任何包含 logs/ 的 run 目录", file=sys.stderr)
+        print(f"Error: No run directories with logs/ found in {outputs_dir}", file=sys.stderr)
         sys.exit(1)
 
     total = len(run_dirs)
@@ -366,7 +379,7 @@ def main():
     generated = 0
     failed = 0
 
-    print(f"发现 {total} 个 run 目录 (force={args.force})")
+    print(f"Found {total} run directories (force={args.force})")
     print("=" * 60)
 
     for i, log_dir in enumerate(run_dirs, 1):
@@ -387,13 +400,13 @@ def main():
                 print("OK")
             else:
                 failed += 1
-                print("无日志数据")
+                print("No log data")
         except Exception as e:
             failed += 1
-            print(f"错误: {e}")
+            print(f"Error: {e}")
 
     print("=" * 60)
-    print(f"完成: 生成 {generated}, 跳过 {skipped}, 失败/无数据 {failed}, 共 {total}")
+    print(f"Done: generated {generated}, skipped {skipped}, failed/no-data {failed}, total {total}")
 
 
 if __name__ == "__main__":

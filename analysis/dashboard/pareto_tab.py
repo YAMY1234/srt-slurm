@@ -66,11 +66,9 @@ def render(
         **Output TPS/User** (throughput per user).
         """)
 
-    # Compute aggregate stats for each run (from worker logs)
     run_aggregate_stats = {}
     if filtered_runs:
         for run in filtered_runs:
-            # Build run_id to match what's used in selected_runs
             if run.metadata.is_aggregated:
                 run_id = f"{run.job_id}_{run.metadata.agg_workers}A_{run.metadata.run_date}"
             else:

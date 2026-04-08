@@ -97,5 +97,7 @@ class SABenchRunner(BenchmarkRunner):
             str(prefill_gpus),
             str(decode_gpus),
             str(b.random_range_ratio) if b.random_range_ratio is not None else "0.8",
+            str(b.warmup_multiplier) if b.warmup_multiplier is not None else "2",
+            str(b.formal_multiplier) if b.formal_multiplier is not None else "10",
         ]
         return cmd

@@ -4,12 +4,16 @@ Shared components and utilities for the dashboard
 
 import logging
 import os
+import time
 
 import streamlit as st
 
 from analysis.srtlog import NodeAnalyzer, RunLoader
 
 logger = logging.getLogger(__name__)
+
+# How long (seconds) before data is considered stale and auto-refreshed
+DATA_TTL_SECONDS = 600  # 10 minutes
 
 
 # Custom CSS
@@ -46,35 +50,72 @@ def apply_custom_css():
     st.markdown(CUSTOM_CSS, unsafe_allow_html=True)
 
 
-def get_logs_dir_fingerprint(logs_dir):
-    """Get a fingerprint of the logs directory for cache invalidation.
-
-    Returns a tuple of sorted subdirectory names. When new directories are added,
-    the fingerprint changes, automatically invalidating the cache.
-    """
-    if not os.path.exists(logs_dir):
-        return ()
-    subdirs = [d for d in os.listdir(logs_dir) if os.path.isdir(os.path.join(logs_dir, d))]
-    return tuple(sorted(subdirs))
+def _session_cache_key(logs_dir: str) -> str:
+    """Build a session-state key scoped to the logs directory."""
+    return f"_cached_data_{logs_dir}"
 
 
-@st.cache_data
-def load_data(logs_dir, _dir_fingerprint=None):
-    """Load and cache benchmark data.
+def _session_ts_key(logs_dir: str) -> str:
+    return f"_cached_ts_{logs_dir}"
 
-    Args:
-        logs_dir: Path to the logs directory
-        _dir_fingerprint: Fingerprint of directory contents for cache invalidation.
-                         Pass get_logs_dir_fingerprint(logs_dir) to auto-invalidate
-                         when new directories are added.
+
+def load_data_cached(logs_dir: str, force_refresh: bool = False):
+    """Load benchmark data, backed by session_state to avoid Lustre scans.
+
+    On a Lustre filesystem, listing 300+ directories is extremely slow (~160s).
+    This function stores loaded data in st.session_state so that subsequent
+    Streamlit reruns (widget clicks, filter changes, etc.) are instant.
+
+    Data is refreshed only when:
+    - force_refresh=True (user clicked the Refresh button)
+    - TTL has expired (DATA_TTL_SECONDS)
+    - No cached data exists yet (first load)
 
     Returns:
-        Tuple of (runs_with_data, skipped_runs)
-        - runs_with_data: List of BenchmarkRun objects with benchmark results
-        - skipped_runs: List of tuples (job_id, run_dir, reason) for skipped runs
+        Tuple of (runs_with_data, skipped_runs, was_refreshed)
     """
+    cache_key = _session_cache_key(logs_dir)
+    ts_key = _session_ts_key(logs_dir)
+
+    now = time.time()
+    cached_ts = st.session_state.get(ts_key, 0)
+    is_stale = (now - cached_ts) > DATA_TTL_SECONDS
+    has_cache = cache_key in st.session_state
+
+    if has_cache and not force_refresh and not is_stale:
+        return (*st.session_state[cache_key], False)
+
+    if force_refresh:
+        _invalidate_parquet_caches(logs_dir)
+
     loader = RunLoader(logs_dir)
-    return loader.load_all_with_skipped()
+    result = loader.load_all_with_skipped()
+
+    st.session_state[cache_key] = result
+    st.session_state[ts_key] = now
+    return (*result, True)
+
+
+def _invalidate_parquet_caches(logs_dir: str):
+    """Delete parquet caches in all run directories so data is re-parsed from source."""
+    from analysis.srtlog.cache_manager import CacheManager
+
+    if not os.path.exists(logs_dir):
+        return
+    for entry in os.scandir(logs_dir):
+        if entry.is_dir() and not entry.name.startswith("."):
+            try:
+                CacheManager(entry.path).invalidate_cache()
+            except Exception:
+                pass
+
+
+def invalidate_data_cache(logs_dir: str):
+    """Invalidate session-state cache (e.g. after tag update)."""
+    cache_key = _session_cache_key(logs_dir)
+    ts_key = _session_ts_key(logs_dir)
+    st.session_state.pop(cache_key, None)
+    st.session_state.pop(ts_key, None)
 
 
 @st.cache_data(show_spinner="Loading node metrics from logs...")

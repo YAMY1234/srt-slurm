@@ -15,7 +15,12 @@ NUM_EXAMPLES=${5:-}
 CATEGORIES=${6:-}
 REPEAT=${7:-1}
 
-MODEL_NAME="nvidia/DeepSeek-R1-0528-NVFP4-v2"
+# Auto-detect model name from /v1/models endpoint; fall back to default
+MODEL_NAME=$(curl -s "${ENDPOINT}/v1/models" 2>/dev/null | python3 -c "import sys,json; print(json.load(sys.stdin)['data'][0]['id'])" 2>/dev/null || echo "")
+if [ -z "${MODEL_NAME}" ]; then
+    MODEL_NAME="nvidia/DeepSeek-R1-0528-NVFP4-v2"
+    echo "Warning: Could not auto-detect model name, using default: ${MODEL_NAME}"
+fi
 
 echo "LongBench-v2 Config: endpoint=${ENDPOINT}; max_context_length=${MAX_CONTEXT_LENGTH}; num_threads=${NUM_THREADS}; max_tokens=${MAX_TOKENS}; num_examples=${NUM_EXAMPLES:-all}; categories=${CATEGORIES:-all}; repeat=${REPEAT}"
 

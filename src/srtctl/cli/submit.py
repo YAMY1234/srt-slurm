@@ -40,6 +40,88 @@ from srtctl.core.status import create_job_record
 console = Console()
 
 
+def resolve_sglang_repo_path(config: SrtConfig) -> Path | None:
+    """Resolve the host-side sglang repo path from recipe mounts."""
+    target_mount = "/sgl-workspace/sglang"
+
+    if config.extra_mount:
+        for mount_spec in config.extra_mount:
+            host_path, sep, container_path = mount_spec.partition(":")
+            if not sep:
+                continue
+            if container_path.rstrip("/") == target_mount:
+                return Path(os.path.expandvars(host_path)).expanduser()
+
+    if config.container_mounts:
+        for host_path, container_path in config.container_mounts.items():
+            if str(container_path).rstrip("/") == target_mount:
+                return Path(os.path.expandvars(str(host_path))).expanduser()
+
+    return None
+
+
+def dump_sglang_git_snapshot(config: SrtConfig, output_dir: Path) -> None:
+    """Persist recent sglang git history and diff for this submission."""
+    snapshot_path = output_dir / "sglang_git_snapshot.txt"
+    repo_path = resolve_sglang_repo_path(config)
+
+    lines = [
+        f"generated_at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+        f"resolved_repo_path: {repo_path if repo_path else 'unresolved'}",
+        "",
+    ]
+
+    if repo_path is None:
+        lines.extend(
+            [
+                "Unable to resolve sglang repo path from recipe mounts.",
+                "Expected a mount targeting /sgl-workspace/sglang in extra_mount or container_mounts.",
+                "",
+            ]
+        )
+        snapshot_path.write_text("\n".join(lines), encoding="utf-8")
+        return
+
+    if not repo_path.exists():
+        lines.extend(
+            [
+                f"Resolved sglang repo path does not exist: {repo_path}",
+                "",
+            ]
+        )
+        snapshot_path.write_text("\n".join(lines), encoding="utf-8")
+        return
+
+    def _run_git_command(args: list[str]) -> str:
+        result = subprocess.run(
+            ["git", *args],
+            cwd=repo_path,
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode == 0:
+            return result.stdout.rstrip() or "<no output>"
+        return "\n".join(
+            [
+                f"<command failed: git {' '.join(args)}>",
+                f"exit_code: {result.returncode}",
+                result.stderr.rstrip() or "<no stderr>",
+            ]
+        )
+
+    lines.extend(
+        [
+            "=== git log --oneline -10 ===",
+            _run_git_command(["log", "--oneline", "-10"]),
+            "",
+            "=== git diff ===",
+            _run_git_command(["diff"]),
+            "",
+        ]
+    )
+    snapshot_path.write_text("\n".join(lines), encoding="utf-8")
+
+
 def setup_logging(level: int = logging.INFO) -> None:
     logging.basicConfig(
         level=level,
@@ -290,6 +372,7 @@ def submit_with_orchestrator(
 
         shutil.copy(config_path, job_output_dir / "config.yaml")
         shutil.copy(script_path, job_output_dir / "sbatch_script.sh")
+        dump_sglang_git_snapshot(config, job_output_dir)
 
         # Build comprehensive job metadata
         metadata = {

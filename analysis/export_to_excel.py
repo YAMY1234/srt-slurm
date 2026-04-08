@@ -5,13 +5,13 @@ Export benchmark runs to Excel (incremental update)
 Usage:
     # Default: export outputs directory to benchmark_summary.xlsx (incremental)
     python analysis/export_to_excel.py
-    
+
     # Force full refresh (ignore existing Excel)
     python analysis/export_to_excel.py --full
-    
+
     # Export additional directories
     python analysis/export_to_excel.py --output-dir outputs outputs-old
-    
+
 This script loads benchmark runs and exports them to an Excel file.
 By default, it performs incremental updates - only adding new runs that
 don't already exist in the Excel file.
@@ -83,11 +83,7 @@ def detect_mtp_info(run: BenchmarkRun) -> tuple[bool, int]:
                         return (num_steps > 0, num_steps)
 
                 # Method 3: Check decode sglang_config for speculative settings
-                decode_config = (
-                    config.get("backend", {})
-                    .get("sglang_config", {})
-                    .get("decode", {})
-                )
+                decode_config = config.get("backend", {}).get("sglang_config", {}).get("decode", {})
                 if decode_config:
                     spec_steps = decode_config.get("speculative-num-steps", 0)
                     spec_algo = decode_config.get("speculative-algorithm", "")
@@ -103,16 +99,16 @@ def detect_mtp_info(run: BenchmarkRun) -> tuple[bool, int]:
 
 def get_existing_job_ids(excel_file: str) -> set[str]:
     """Read existing job IDs from Excel file.
-    
+
     Args:
         excel_file: Path to existing Excel file
-        
+
     Returns:
         Set of job IDs already in the Excel
     """
     if not os.path.exists(excel_file):
         return set()
-    
+
     try:
         df = pd.read_excel(excel_file, sheet_name="Summary")
         # Convert to string to handle both int and string job IDs
@@ -126,7 +122,7 @@ def get_best_result(run: BenchmarkRun) -> dict:
     """Get the best benchmark result for a run (highest Output TPS)."""
     if not run.profiler.output_tps:
         return {}
-    
+
     # Find the index with max output TPS
     max_idx = 0
     max_tps = 0
@@ -134,17 +130,19 @@ def get_best_result(run: BenchmarkRun) -> dict:
         if tps and tps > max_tps:
             max_tps = tps
             max_idx = i
-    
+
     total_gpus = run.total_gpus
     tps = run.profiler.output_tps[max_idx] if max_idx < len(run.profiler.output_tps) else 0
     tps_per_gpu = tps / total_gpus if total_gpus > 0 else 0
-    
+
     # Calculate TPS/User from TPOT
     tpot = run.profiler.mean_tpot_ms[max_idx] if max_idx < len(run.profiler.mean_tpot_ms) else None
     tps_per_user = 1000 / tpot if tpot and tpot > 0 else 0
-    
+
     return {
-        "Best Concurrency": run.profiler.concurrency_values[max_idx] if max_idx < len(run.profiler.concurrency_values) else None,
+        "Best Concurrency": run.profiler.concurrency_values[max_idx]
+        if max_idx < len(run.profiler.concurrency_values)
+        else None,
         "Best Output TPS": tps,
         "Best Output TPS/GPU": tps_per_gpu,
         "Best Output TPS/User": tps_per_user,
@@ -157,14 +155,14 @@ def get_best_result(run: BenchmarkRun) -> dict:
 def create_summary_df(runs: list[BenchmarkRun]) -> pd.DataFrame:
     """Create summary DataFrame with one row per run."""
     rows = []
-    
+
     for run in runs:
         # Extract job name from directory path
         job_name = os.path.basename(run.metadata.path)
-        
+
         # Detect MTP configuration
         mtp_enabled, mtp_steps = detect_mtp_info(run)
-        
+
         # Basic config
         row = {
             "Job ID": run.job_id,
@@ -189,37 +187,37 @@ def create_summary_df(runs: list[BenchmarkRun]) -> pd.DataFrame:
             "Is Complete": run.is_complete,
             "Tags": ", ".join(run.tags) if run.tags else "",
         }
-        
+
         # Add best result metrics
         best_result = get_best_result(run)
         row.update(best_result)
-        
+
         rows.append(row)
-    
+
     return pd.DataFrame(rows)
 
 
 def create_all_results_df(runs: list[BenchmarkRun]) -> pd.DataFrame:
     """Create DataFrame with all benchmark results (one row per concurrency per run)."""
     rows = []
-    
+
     for run in runs:
         job_name = os.path.basename(run.metadata.path)
         total_gpus = run.total_gpus
         mtp_enabled, mtp_steps = detect_mtp_info(run)
-        
+
         for i in range(len(run.profiler.output_tps)):
             tps = run.profiler.output_tps[i]
             tps_per_gpu = tps / total_gpus if total_gpus > 0 else 0
-            
+
             # Calculate TPS/User from TPOT
             tpot = run.profiler.mean_tpot_ms[i] if i < len(run.profiler.mean_tpot_ms) else None
             tps_per_user = 1000 / tpot if tpot and tpot > 0 else 0
-            
+
             # Get total TPS
             total_tps = run.profiler.total_tps[i] if i < len(run.profiler.total_tps) else None
             total_tps_per_gpu = total_tps / total_gpus if total_tps and total_gpus > 0 else None
-            
+
             row = {
                 "Job ID": run.job_id,
                 "Job Name": job_name,
@@ -247,21 +245,23 @@ def create_all_results_df(runs: list[BenchmarkRun]) -> pd.DataFrame:
                 "P99 TTFT (ms)": run.profiler.p99_ttft_ms[i] if i < len(run.profiler.p99_ttft_ms) else None,
                 "P99 TPOT (ms)": run.profiler.p99_tpot_ms[i] if i < len(run.profiler.p99_tpot_ms) else None,
                 "P99 ITL (ms)": run.profiler.p99_itl_ms[i] if i < len(run.profiler.p99_itl_ms) else None,
-                "Request Throughput": run.profiler.request_throughput[i] if i < len(run.profiler.request_throughput) else None,
+                "Request Throughput": run.profiler.request_throughput[i]
+                if i < len(run.profiler.request_throughput)
+                else None,
             }
             rows.append(row)
-    
+
     return pd.DataFrame(rows)
 
 
 def create_config_details_df(runs: list[BenchmarkRun]) -> pd.DataFrame:
     """Create DataFrame with detailed configuration for each run."""
     rows = []
-    
+
     for run in runs:
         job_name = os.path.basename(run.metadata.path)
         mtp_enabled, mtp_steps = detect_mtp_info(run)
-        
+
         row = {
             "Job ID": run.job_id,
             "Job Name": job_name,
@@ -286,24 +286,26 @@ def create_config_details_df(runs: list[BenchmarkRun]) -> pd.DataFrame:
             "Concurrencies Config": run.profiler.concurrencies,
             "Request Rate Config": run.profiler.req_rate,
             "Is Complete": run.is_complete,
-            "Missing Concurrencies": ", ".join(map(str, run.missing_concurrencies)) if run.missing_concurrencies else "",
+            "Missing Concurrencies": ", ".join(map(str, run.missing_concurrencies))
+            if run.missing_concurrencies
+            else "",
             "Tags": ", ".join(run.tags) if run.tags else "",
             "Path": run.metadata.path,
         }
         rows.append(row)
-    
+
     return pd.DataFrame(rows)
 
 
 def load_existing_data(excel_file: str) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     """Load existing data from Excel file.
-    
+
     Returns:
         Tuple of (summary_df, all_results_df, config_df) or empty DataFrames if file doesn't exist
     """
     if not os.path.exists(excel_file):
         return pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
-    
+
     try:
         summary_df = pd.read_excel(excel_file, sheet_name="Summary")
         all_results_df = pd.read_excel(excel_file, sheet_name="All Results")
@@ -333,7 +335,7 @@ def adjust_column_widths(writer: pd.ExcelWriter) -> None:
 
 def export_to_excel(logs_dirs: list[str], output_file: str, full_refresh: bool = False) -> None:
     """Export benchmark runs to Excel file with incremental updates.
-    
+
     Args:
         logs_dirs: List of paths to directories containing benchmark run subdirectories
         output_file: Path to output Excel file
@@ -341,83 +343,85 @@ def export_to_excel(logs_dirs: list[str], output_file: str, full_refresh: bool =
     """
     # Get existing job IDs for incremental update
     existing_job_ids = set() if full_refresh else get_existing_job_ids(output_file)
-    
+
     if existing_job_ids:
         print(f"Found {len(existing_job_ids)} existing runs in Excel")
-    
+
     # Load runs from directories
     all_runs = []
     new_runs = []
     total_skipped = []
-    
+
     for logs_dir in logs_dirs:
         print(f"Scanning: {logs_dir}")
-        
+
         loader = RunLoader(logs_dir)
         runs, skipped = loader.load_all_with_skipped()
-        
+
         all_runs.extend(runs)
-        
+
         # Filter to only new runs
         for run in runs:
             if str(run.job_id) not in existing_job_ids:
                 new_runs.append(run)
-        
+
         total_skipped.extend(skipped)
-    
+
     print(f"\nFound {len(all_runs)} total runs, {len(new_runs)} new runs to add")
-    
+
     if not new_runs and not full_refresh:
         print("No new runs to add. Excel is up to date.")
         return
-    
+
     if not all_runs:
         print("No runs found with benchmark data!")
         return
-    
+
     # For incremental update, load existing data and append
     if not full_refresh and os.path.exists(output_file):
-        print(f"Performing incremental update...")
+        print("Performing incremental update...")
         existing_summary, existing_results, existing_config = load_existing_data(output_file)
-        
+
         # Create DataFrames for new runs only
         new_summary_df = create_summary_df(new_runs)
         new_results_df = create_all_results_df(new_runs)
         new_config_df = create_config_details_df(new_runs)
-        
+
         # Concatenate with existing data
         summary_df = pd.concat([existing_summary, new_summary_df], ignore_index=True)
         all_results_df = pd.concat([existing_results, new_results_df], ignore_index=True)
         config_df = pd.concat([existing_config, new_config_df], ignore_index=True)
-        
+
         print(f"  Added {len(new_runs)} new runs")
     else:
         # Full refresh - use all runs
-        print(f"Performing full export...")
+        print("Performing full export...")
         summary_df = create_summary_df(all_runs)
         all_results_df = create_all_results_df(all_runs)
         config_df = create_config_details_df(all_runs)
-    
+
     # Ensure Job ID is string type for consistent sorting
     summary_df["Job ID"] = summary_df["Job ID"].astype(str)
     all_results_df["Job ID"] = all_results_df["Job ID"].astype(str)
     config_df["Job ID"] = config_df["Job ID"].astype(str)
-    
+
     # Sort by job ID (descending - newest first, treating as numeric for proper ordering)
     summary_df = summary_df.sort_values("Job ID", ascending=False, key=lambda x: x.astype(int))
-    all_results_df = all_results_df.sort_values(["Job ID", "Concurrency"], ascending=[False, True], key=lambda x: x.astype(int) if x.name == "Job ID" else x)
+    all_results_df = all_results_df.sort_values(
+        ["Job ID", "Concurrency"], ascending=[False, True], key=lambda x: x.astype(int) if x.name == "Job ID" else x
+    )
     config_df = config_df.sort_values("Job ID", ascending=False, key=lambda x: x.astype(int))
-    
+
     # Export to Excel
     print(f"\nWriting to: {output_file}")
-    
+
     with pd.ExcelWriter(output_file, engine="openpyxl") as writer:
         summary_df.to_excel(writer, sheet_name="Summary", index=False)
         all_results_df.to_excel(writer, sheet_name="All Results", index=False)
         config_df.to_excel(writer, sheet_name="Config Details", index=False)
         adjust_column_widths(writer)
-    
-    print(f"\nExcel export complete!")
+
+    print("\nExcel export complete!")
     print(f"  - Summary: {len(summary_df)} runs")
     print(f"  - All Results: {len(all_results_df)} data points")
     print(f"  - Config Details: {len(config_df)} configurations")
@@ -440,7 +444,7 @@ Examples:
     
     # Custom Excel filename
     python analysis/export_to_excel.py --excel-file my_results.xlsx
-        """
+        """,
     )
     parser.add_argument(
         "--output-dir",
@@ -460,34 +464,34 @@ Examples:
         action="store_true",
         help="Force full refresh, ignoring existing Excel data",
     )
-    
+
     args = parser.parse_args()
-    
+
     # Resolve paths
     script_dir = Path(__file__).parent.parent
     logs_dirs = []
-    
+
     for output_dir in args.output_dir:
         logs_dir = script_dir / output_dir
-        
+
         if not logs_dir.exists():
             # Try absolute path
             logs_dir = Path(output_dir)
             if not logs_dir.exists():
                 print(f"Warning: Directory not found, skipping: {output_dir}")
                 continue
-        
+
         logs_dirs.append(str(logs_dir))
-    
+
     if not logs_dirs:
         print("Error: No valid output directories found!")
         sys.exit(1)
-    
+
     # Resolve output file path
     output_file = args.excel_file
     if not os.path.isabs(output_file):
         output_file = str(script_dir / output_file)
-    
+
     export_to_excel(logs_dirs, output_file, full_refresh=args.full)
 
 

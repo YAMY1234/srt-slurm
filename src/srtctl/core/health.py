@@ -346,7 +346,7 @@ def wait_for_model(
     report_every: float = 60.0,
     frontend_type: str = "dynamo",
     stop_event: threading.Event | None = None,
-    stability_duration: float = 30.0,
+    stability_duration: float = 10.0,
 ) -> bool:
     """Wait for model to be ready with expected worker counts.
 
@@ -365,7 +365,7 @@ def wait_for_model(
         report_every: Log progress every N seconds
         frontend_type: Frontend type - "sglang" uses /workers, "dynamo" uses /health
         stop_event: Optional threading.Event to abort waiting
-        stability_duration: Seconds the model must remain healthy consecutively (default: 30s)
+        stability_duration: Seconds the model must remain healthy consecutively (default: 10s)
 
     Returns:
         True if model is ready with expected workers, False if timeout/aborted

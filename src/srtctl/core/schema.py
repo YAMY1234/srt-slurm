@@ -225,7 +225,9 @@ class BenchmarkType(str, Enum):
     MOONCAKE_ROUTER = "mooncake-router"
     MMLU = "mmlu"
     GPQA = "gpqa"
+    GSM8K_BENCH = "gsm8k-bench"
     LONGBENCHV2 = "longbenchv2"
+    PYTEST = "pytest"
 
 
 class ProfilingType(str, Enum):
@@ -531,11 +533,22 @@ class BenchmarkConfig:
     num_requests: int | None = None
     concurrency: int | None = None
     prefix_ratios: list[float] | str | None = None
+    # Pytest runner fields
+    test_path: str | None = None
+    pytest_args: str | None = None
     # Mooncake router benchmark fields (uses aiperf with mooncake_trace)
     mooncake_workload: str | None = None  # "mooncake", "conversation", "synthetic", "toolagent"
     ttft_threshold_ms: int | None = None  # Goodput TTFT threshold in ms (default: 2000)
     itl_threshold_ms: int | None = None  # Goodput ITL threshold in ms (default: 25)
     random_range_ratio: float | None = None  # Random input/output length range ratio (default: 0.8)
+    warmup_multiplier: int | None = None  # Warmup prompts = concurrency * this (default: 2)
+    formal_multiplier: int | None = None  # Formal prompts = concurrency * this (default: 10)
+    # GSM8K-Bench fields
+    use_chat_api: bool = False  # Use /v1/chat/completions instead of /v1/completions
+    platinum: bool = False  # Use GSM8K Platinum dataset (corrected labels)
+    temperature: float | None = None
+    top_p: float | None = None
+    top_k: int | None = None
 
     def get_concurrency_list(self) -> list[int]:
         if self.concurrencies is None:
@@ -715,20 +728,56 @@ class DynamoConfig:
         # Source install (hash or top-of-tree)
         git_ref = self.hash if self.hash else "HEAD"
         checkout_cmd = f"git checkout {self.hash}" if self.hash else ""
+        cache_dir = f"/configs/dynamo-wheel-cache/{git_ref}"
+        cache_ready = f"{cache_dir}/.ready"
 
-        return (
-            f"echo 'Installing dynamo from source ({git_ref})...' && "
+        # Clone repo (needed for both cached and uncached paths)
+        clone_cmds = (
             "cd /sgl-workspace/ && "
             "git clone https://github.com/ai-dynamo/dynamo.git && "
             "cd dynamo && "
             f"{checkout_cmd + ' && ' if checkout_cmd else ''}"
-            "cd lib/bindings/python/ && "
-            'export RUSTFLAGS="${RUSTFLAGS:-} -C target-cpu=native" && '
-            "maturin build -o /tmp && "
-            "pip install /tmp/ai_dynamo_runtime*.whl && "
+        )
+
+        # Build from source with atomic cache: first node builds, others wait.
+        # Uses mkdir as an atomic lock (succeeds for exactly one node) and a
+        # .ready sentinel so readers never see a partially-written wheel.
+        build_or_wait_cmds = (
+            f"if [ -f {cache_ready} ]; then "
+            f"echo 'Using cached wheel from {cache_dir}'; "
+            f"elif mkdir {cache_dir}.lock 2>/dev/null; then "
+            "echo 'Won build lock, compiling dynamo runtime...' && "
+            "apt-get update -qq && apt-get install -y -qq libclang-dev > /dev/null 2>&1 && "
+            "if ! command -v cargo &>/dev/null; then "
+            "curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y && "
+            'source "$HOME/.cargo/env"; fi && '
+            "cd /sgl-workspace/dynamo/lib/bindings/python/ && "
+            'export RUSTFLAGS="${RUSTFLAGS:-} --cfg tokio_unstable" && '
+            "maturin build --release -o /tmp && "
+            f"mkdir -p {cache_dir} && "
+            f"cp /tmp/ai_dynamo_runtime*.whl {cache_dir}/ && "
+            f"touch {cache_ready} && "
+            f"echo 'Cached wheel to {cache_dir}'; "
+            "else "
+            f"echo 'Another node is building, waiting for {cache_ready}...' && "
+            f"while [ ! -f {cache_ready} ]; do sleep 5; done && "
+            f"echo 'Cache ready from {cache_dir}'; "
+            "fi"
+        )
+
+        # Install runtime wheel + python package
+        install_cmds = (
+            f"pip install {cache_dir}/ai_dynamo_runtime*.whl && "
             "cd /sgl-workspace/dynamo/ && "
             "pip install -e . && "
-            "cd /sgl-workspace/sglang/ && "
+            "cd /sgl-workspace/sglang/"
+        )
+
+        return (
+            f"echo 'Installing dynamo from source ({git_ref})...' && "
+            f"{clone_cmds}"
+            f"{build_or_wait_cmds} && "
+            f"{install_cmds} && "
             f"echo 'Dynamo installed from source ({git_ref})'"
         )
 

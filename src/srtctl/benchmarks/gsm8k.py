@@ -65,4 +65,3 @@ class GSM8KRunner(BenchmarkRunner):
             str(b.top_p) if b.top_p is not None else "",
             str(b.top_k) if b.top_k is not None else "",
         ]
-

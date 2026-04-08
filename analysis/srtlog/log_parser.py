@@ -38,11 +38,15 @@ class NodeAnalyzer:
         # Initialize cache manager
         cache_mgr = CacheManager(run_path)
 
-        # Define source patterns for cache validation (.err and .out files)
-        source_patterns = ["*.err", "*.out"]
+        # Sentinel: benchmark.out grows as new concurrency levels complete
+        sentinel = None
+        for candidate in ("benchmark.out", "logs/benchmark.out"):
+            if os.path.exists(os.path.join(run_path, candidate)):
+                sentinel = candidate
+                break
 
         # Try to load from cache first
-        if cache_mgr.is_cache_valid("node_metrics", source_patterns):
+        if cache_mgr.is_cache_valid("node_metrics", sentinel=sentinel):
             cached_df = cache_mgr.load_from_cache("node_metrics")
             if cached_df is not None and not cached_df.empty:
                 if return_dicts:
@@ -66,7 +70,9 @@ class NodeAnalyzer:
         parsed_successfully = 0
 
         for file in os.listdir(run_path):
-            if (file.endswith(".err") or file.endswith(".out")) and ("prefill" in file or "decode" in file or "agg" in file):
+            if (file.endswith(".err") or file.endswith(".out")) and (
+                "prefill" in file or "decode" in file or "agg" in file
+            ):
                 total_err_files += 1
                 filepath = os.path.join(run_path, file)
                 node = self.parse_single_log(filepath)
@@ -82,7 +88,7 @@ class NodeAnalyzer:
         # Save to cache if we have data
         if nodes:
             cache_df = self._serialize_node_metrics(nodes)
-            cache_mgr.save_to_cache("node_metrics", cache_df, source_patterns)
+            cache_mgr.save_to_cache("node_metrics", cache_df, sentinel=sentinel)
 
         return nodes
 
@@ -314,11 +320,22 @@ class NodeAnalyzer:
                     }
                     # Add optional fields
                     for field in [
-                        "new_seq", "new_token", "cached_token", "token_usage",
-                        "running_req", "queue_req", "prealloc_req", "inflight_req",
-                        "transfer_req", "preallocated_usage", "num_tokens",
-                        "input_throughput", "gen_throughput",
-                        "accept_len", "accept_rate", "retracted_req",
+                        "new_seq",
+                        "new_token",
+                        "cached_token",
+                        "token_usage",
+                        "running_req",
+                        "queue_req",
+                        "prealloc_req",
+                        "inflight_req",
+                        "transfer_req",
+                        "preallocated_usage",
+                        "num_tokens",
+                        "input_throughput",
+                        "gen_throughput",
+                        "accept_len",
+                        "accept_rate",
+                        "retracted_req",
                     ]:
                         if pd.notna(row.get(field)):
                             batch[field] = row[field]
@@ -723,13 +740,46 @@ class NodeAnalyzer:
 def compute_worker_aggregate_stats(run_path: str) -> dict:
     """Compute aggregate statistics from all prefill and decode worker logs.
 
+    Results are cached as a tiny JSON file (~1 KB) to avoid reading the much
+    larger node_metrics parquet on subsequent loads.
+
     Args:
         run_path: Path to the run directory containing worker log files
 
     Returns:
         Dict with 'prefill' and 'decode' keys, each containing averaged metrics
     """
+    import json
+
     import numpy as np
+
+    # Fast path: load from cached aggregate JSON (~1 KB vs multi-MB parquet)
+    cache_dir = os.path.join(run_path, "cached_assets")
+    cache_file = os.path.join(cache_dir, "worker_aggregate_stats.json")
+
+    sentinel_path = None
+    for candidate in ("benchmark.out", "logs/benchmark.out"):
+        p = os.path.join(run_path, candidate)
+        if os.path.exists(p):
+            sentinel_path = p
+            break
+
+    if os.path.exists(cache_file):
+        try:
+            with open(cache_file) as f:
+                cached = json.load(f)
+            # Validate sentinel size (same logic as CacheManager)
+            if sentinel_path:
+                current_size = os.path.getsize(sentinel_path)
+                if cached.get("_sentinel_size") == current_size:
+                    cached.pop("_sentinel_size", None)
+                    return cached
+                # sentinel size differs → stale, fall through to recompute
+            else:
+                cached.pop("_sentinel_size", None)
+                return cached
+        except (json.JSONDecodeError, OSError, KeyError):
+            pass
 
     analyzer = NodeAnalyzer()
     nodes = analyzer.parse_run_logs(run_path)
@@ -867,10 +917,23 @@ def compute_worker_aggregate_stats(run_path: str) -> dict:
 
         return result
 
-    return {
+    result = {
         "prefill": aggregate_prefill_metrics(prefill_nodes),
         "decode": aggregate_decode_metrics(decode_nodes),
     }
+
+    # Persist as tiny JSON so next load skips the large parquet entirely
+    try:
+        os.makedirs(cache_dir, exist_ok=True)
+        to_save = dict(result)
+        if sentinel_path:
+            to_save["_sentinel_size"] = os.path.getsize(sentinel_path)
+        with open(cache_file, "w") as f:
+            json.dump(to_save, f)
+    except OSError:
+        pass
+
+    return result
 
 
 # Standalone helper function for visualizations

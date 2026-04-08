@@ -56,48 +56,58 @@ class BenchmarkStageMixin:
         self, registry: "ProcessRegistry", stop_event: threading.Event, reporter: StatusReporter | None = None
     ) -> int:
         """Run the benchmark."""
-        logger.info("Waiting for workers to be ready...")
+        benchmark_type = self.config.benchmark.type
 
-        r = self.config.resources
-        num_workers = r.num_prefill + r.num_decode + r.num_agg
+        # Check if runner needs a running server (pytest etc. don't)
+        from srtctl.benchmarks import get_runner as _peek_runner
 
-        # Build descriptive worker count string
-        worker_desc = f"{r.num_agg} agg" if r.num_agg > 0 else f"{r.num_prefill}P + {r.num_decode}D"
+        try:
+            _runner = _peek_runner(benchmark_type)
+            skip_health = getattr(_runner, "needs_server", True) is False
+        except ValueError:
+            skip_health = False
 
-        logger.info("Waiting for server health (expecting %d workers: %s)...", num_workers, worker_desc)
+        if not skip_health:
+            logger.info("Waiting for workers to be ready...")
 
-        # For aggregated mode: expect 0 prefill, N decode (backend workers count as decode)
-        # For disaggregated mode: expect N prefill, M decode
-        if r.num_agg > 0:
-            n_prefill = 0
-            n_decode = r.num_agg
+            r = self.config.resources
+            num_workers = r.num_prefill + r.num_decode + r.num_agg
+
+            worker_desc = f"{r.num_agg} agg" if r.num_agg > 0 else f"{r.num_prefill}P + {r.num_decode}D"
+
+            logger.info("Waiting for server health (expecting %d workers: %s)...", num_workers, worker_desc)
+
+            if r.num_agg > 0:
+                n_prefill = 0
+                n_decode = r.num_agg
+            else:
+                n_prefill = r.num_prefill
+                n_decode = r.num_decode
+
+            hc = self.config.health_check
+            public_port = self.runtime.frontend_port
+            if not wait_for_model(
+                host=self.runtime.nodes.head,
+                port=public_port,
+                n_prefill=n_prefill,
+                n_decode=n_decode,
+                poll_interval=float(hc.interval_seconds),
+                timeout=float(hc.max_attempts * hc.interval_seconds),
+                report_every=60.0,
+                frontend_type=self.config.frontend.type,
+                stop_event=stop_event,
+            ):
+                logger.error("Server did not become healthy")
+                if reporter:
+                    reporter.report(JobStatus.FAILED, JobStage.BENCHMARK, "Workers failed health check")
+                return 1
+
+            logger.info("Server is healthy - starting benchmark")
         else:
-            n_prefill = r.num_prefill
-            n_decode = r.num_decode
+            logger.info("Benchmark type '%s' does not require a running server, skipping health check", benchmark_type)
 
-        hc = self.config.health_check
-        public_port = self.runtime.frontend_port
-        if not wait_for_model(
-            host=self.runtime.nodes.head,
-            port=public_port,
-            n_prefill=n_prefill,
-            n_decode=n_decode,
-            poll_interval=float(hc.interval_seconds),
-            timeout=float(hc.max_attempts * hc.interval_seconds),
-            report_every=60.0,
-            frontend_type=self.config.frontend.type,
-            stop_event=stop_event,
-        ):
-            logger.error("Server did not become healthy")
-            if reporter:
-                reporter.report(JobStatus.FAILED, JobStage.BENCHMARK, "Workers failed health check")
-            return 1
-
-        logger.info("Server is healthy - starting benchmark")
         if reporter:
             reporter.report(JobStatus.BENCHMARK, JobStage.BENCHMARK, "Running benchmark")
-
-        benchmark_type = self.config.benchmark.type
         if self.config.profiling.enabled:
             logger.info(
                 "Profiling enabled (type=%s) with benchmark type '%s'",

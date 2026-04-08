@@ -35,6 +35,8 @@ TOTAL_GPUS=${9:-0}
 PREFILL_GPUS=${10:-0}
 DECODE_GPUS=${11:-0}
 RANDOM_RANGE_RATIO=${12:-0.8}
+WARMUP_MULTIPLIER=${13:-2}
+FORMAL_MULTIPLIER=${14:-10}
 
 # Parse endpoint into host:port
 HOST=$(echo "$ENDPOINT" | sed 's|http://||' | cut -d: -f1)
@@ -81,15 +83,9 @@ for concurrency in "${CONCURRENCY_LIST[@]}"; do
 
     # Warmup: use same settings as benchmark for proper cache warming
     # Scale warmup prompts based on concurrency to avoid excessive warmup time
-    if [ "$concurrency" -ge 1024 ]; then
-        num_warmup_prompts=$((concurrency * 1))
-    elif [ "$concurrency" -ge 512 ]; then
-        num_warmup_prompts=$((concurrency * 2))
-    else
-        num_warmup_prompts=$((concurrency * 3))
-    fi
-    if [ "$num_warmup_prompts" -lt 6 ]; then
-        num_warmup_prompts=6
+    num_warmup_prompts=$((concurrency * WARMUP_MULTIPLIER))
+    if [ "$num_warmup_prompts" -lt 32 ]; then
+        num_warmup_prompts=32
     fi
 
     echo "Warming up with concurrency $concurrency (${num_warmup_prompts} prompts)"
@@ -109,7 +105,10 @@ for concurrency in "${CONCURRENCY_LIST[@]}"; do
         --percentile-metrics ttft,tpot,itl,e2el \
         --max-concurrency "$concurrency"
 
-    num_prompts=$((concurrency * 10))
+    num_prompts=$((concurrency * FORMAL_MULTIPLIER))
+    if [ "$num_prompts" -lt 64 ]; then
+        num_prompts=64
+    fi
     
     # Generate result filename based on mode
     if [ "$IS_DISAGGREGATED" = "true" ]; then

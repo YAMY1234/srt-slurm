@@ -56,23 +56,24 @@ class WorkerStageMixin:
         """Build bash preamble for worker processes.
 
         Runs (in order):
-        1. Custom setup script from /configs/ (if config.setup_script set)
-        2. Dynamo installation (if frontend type is dynamo)
+        1. Dynamo installation (if frontend type is dynamo)
+        2. Custom setup script from /configs/ (if config.setup_script set)
+           Runs AFTER dynamo install so it can patch installed files.
         """
         parts = []
 
-        # 1. Custom setup script (runs first)
+        # 1. Dynamo installation (required for dynamo.sglang when using dynamo frontend)
+        # Skip if dynamo.install is False (container already has dynamo installed)
+        if self.config.frontend.type == "dynamo" and self.config.dynamo.install:
+            parts.append(self.config.dynamo.get_install_commands())
+
+        # 2. Custom setup script (runs after dynamo install)
         if self.config.setup_script:
             script_path = f"/configs/{self.config.setup_script}"
             parts.append(
                 f"echo 'Running setup script: {script_path}' && "
                 f"if [ -f '{script_path}' ]; then bash '{script_path}'; else echo 'WARNING: {script_path} not found'; fi"
             )
-
-        # 2. Dynamo installation (required for dynamo.sglang when using dynamo frontend)
-        # Skip if dynamo.install is False (container already has dynamo installed)
-        if self.config.frontend.type == "dynamo" and self.config.dynamo.install:
-            parts.append(self.config.dynamo.get_install_commands())
 
         if not parts:
             return None

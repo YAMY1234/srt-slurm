@@ -332,11 +332,12 @@ def sample_hf_requests(
     return sampled_requests
 
 
-def _get_prompt_cache_path(input_len: int, output_len: int, range_ratio: float) -> str:
-    """Generate cache file path for prompts."""
+def _get_prompt_cache_path(input_len: int, output_len: int, range_ratio: float, tokenizer_name: str = "") -> str:
+    """Generate cache file path for prompts, scoped by tokenizer to prevent cross-model reuse."""
     cache_dir = "/configs/prompt_cache"
-    # Use a simple key based on workload parameters (model-agnostic for simplicity)
-    cache_key = f"random_{input_len}_{output_len}_{range_ratio:.2f}"
+    import hashlib
+    tok_hash = hashlib.md5(tokenizer_name.encode()).hexdigest()[:8] if tokenizer_name else "generic"
+    cache_key = f"random_{tok_hash}_{input_len}_{output_len}_{range_ratio:.2f}"
     return os.path.join(cache_dir, f"{cache_key}.pkl")
 
 
@@ -469,7 +470,8 @@ def sample_random_requests(
     - If cache exists but has < num_prompts: incremental generation + update cache
     - If no cache: full generation + save cache
     """
-    cache_path = _get_prompt_cache_path(input_len, output_len, range_ratio)
+    tokenizer_name = getattr(tokenizer, "name_or_path", "") or getattr(tokenizer, "vocab_file", "")
+    cache_path = _get_prompt_cache_path(input_len, output_len, range_ratio, tokenizer_name)
     cached_prompts = _load_prompt_cache(cache_path)
     
     if cached_prompts is not None:

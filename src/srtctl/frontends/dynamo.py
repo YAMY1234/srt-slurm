@@ -125,18 +125,18 @@ class DynamoFrontend:
         """Build bash preamble for dynamo frontend processes."""
         parts = []
 
-        # Custom setup script
+        # Dynamo installation (required for dynamo frontend)
+        # Skip if dynamo.install is False (container already has dynamo installed)
+        if config.dynamo.install:
+            parts.append(config.dynamo.get_install_commands())
+
+        # Custom setup script (runs AFTER dynamo install so it can patch files)
         if config.setup_script:
             script_path = f"/configs/{config.setup_script}"
             parts.append(
                 f"echo 'Running setup script: {script_path}' && "
                 f"if [ -f '{script_path}' ]; then bash '{script_path}'; else echo 'WARNING: {script_path} not found'; fi"
             )
-
-        # Dynamo installation (required for dynamo frontend)
-        # Skip if dynamo.install is False (container already has dynamo installed)
-        if config.dynamo.install:
-            parts.append(config.dynamo.get_install_commands())
 
         if not parts:
             return None

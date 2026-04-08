@@ -116,18 +116,20 @@ class TestDryRunEnvironment:
         assert "global" in output
 
     def test_backend_prefill_decode_environment(self, capsys):
-        config = _make_config({
-            "backend": {
-                "type": "sglang",
-                "prefill_environment": {
-                    "TORCH_DISTRIBUTED_DEFAULT_TIMEOUT": "1800",
-                    "PYTHONUNBUFFERED": "1",
+        config = _make_config(
+            {
+                "backend": {
+                    "type": "sglang",
+                    "prefill_environment": {
+                        "TORCH_DISTRIBUTED_DEFAULT_TIMEOUT": "1800",
+                        "PYTHONUNBUFFERED": "1",
+                    },
+                    "decode_environment": {
+                        "SGLANG_ENABLE_FLASHINFER_GEMM": "1",
+                    },
                 },
-                "decode_environment": {
-                    "SGLANG_ENABLE_FLASHINFER_GEMM": "1",
-                },
-            },
-        })
+            }
+        )
         show_config_details(config)
         output = capsys.readouterr().out
         assert "TORCH_DISTRIBUTED_DEFAULT_TIMEOUT" in output
@@ -138,13 +140,15 @@ class TestDryRunEnvironment:
 
     def test_global_and_backend_env_together(self, capsys):
         """Global environment AND backend per-mode env should both appear."""
-        config = _make_config({
-            "environment": {"GLOBAL_VAR": "global_val"},
-            "backend": {
-                "type": "sglang",
-                "prefill_environment": {"PREFILL_VAR": "prefill_val"},
-            },
-        })
+        config = _make_config(
+            {
+                "environment": {"GLOBAL_VAR": "global_val"},
+                "backend": {
+                    "type": "sglang",
+                    "prefill_environment": {"PREFILL_VAR": "prefill_val"},
+                },
+            }
+        )
         show_config_details(config)
         output = capsys.readouterr().out
         assert "GLOBAL_VAR" in output
@@ -159,18 +163,20 @@ class TestDryRunEnvironment:
         assert "No custom environment variables configured" in output
 
     def test_trtllm_backend_environment(self, capsys):
-        config = _make_config({
-            "backend": {
-                "type": "trtllm",
-                "prefill_environment": {
-                    "TRTLLM_ENABLE_PDL": "1",
-                    "NCCL_GRAPH_MIXING_SUPPORT": "0",
+        config = _make_config(
+            {
+                "backend": {
+                    "type": "trtllm",
+                    "prefill_environment": {
+                        "TRTLLM_ENABLE_PDL": "1",
+                        "NCCL_GRAPH_MIXING_SUPPORT": "0",
+                    },
+                    "decode_environment": {
+                        "TRTLLM_SERVER_DISABLE_GC": "1",
+                    },
                 },
-                "decode_environment": {
-                    "TRTLLM_SERVER_DISABLE_GC": "1",
-                },
-            },
-        })
+            }
+        )
         show_config_details(config)
         output = capsys.readouterr().out
         assert "TRTLLM_ENABLE_PDL" in output

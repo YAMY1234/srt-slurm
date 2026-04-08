@@ -206,7 +206,7 @@ def start_etcd(
         data_dir = Path(f"/tmp/etcd-{job_id}")
     else:
         data_dir = Path(f"/tmp/etcd-{client_port}")
-    
+
     data_dir.mkdir(parents=True, exist_ok=True)
     logger.info("etcd data directory: %s", data_dir)
 
@@ -322,7 +322,9 @@ def main():
 
     try:
         nats_proc = start_nats(args.nats_binary, port=nats_port)
-        etcd_proc = start_etcd(host_ip, args.etcd_binary, log_dir, client_port=etcd_client_port, peer_port=etcd_peer_port, job_id=job_id)
+        etcd_proc = start_etcd(
+            host_ip, args.etcd_binary, log_dir, client_port=etcd_client_port, peer_port=etcd_peer_port, job_id=job_id
+        )
 
         # Wait for services
         if not wait_for_service("localhost", nats_port, "NATS"):

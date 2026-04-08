@@ -37,11 +37,17 @@ class SGLangServerConfig:
 
     Each mode can have its own configuration dict that gets converted
     to CLI flags when starting the worker.
+
+    For heterogeneous worker configs, use prefill_groups / decode_groups:
+    each entry in the list maps to the worker at that index. When groups
+    are set, the corresponding single config (prefill/decode) is ignored.
     """
 
     prefill: dict[str, Any] | None = None
     decode: dict[str, Any] | None = None
     aggregated: dict[str, Any] | None = None
+    prefill_groups: list[dict[str, Any]] | None = None
+    decode_groups: list[dict[str, Any]] | None = None
 
     Schema: ClassVar[type[Schema]] = Schema
 
@@ -94,14 +100,26 @@ class SGLangProtocol:
 
         return SrunConfig(mpi=None, oversubscribe=False, launch_per_endpoint=False)
 
-    def get_config_for_mode(self, mode: WorkerMode) -> dict[str, Any]:
-        """Get merged config dict for a worker mode."""
+    def get_config_for_mode(self, mode: WorkerMode, worker_index: int | None = None) -> dict[str, Any]:
+        """Get config dict for a worker mode, optionally for a specific worker index.
+
+        When *_groups is defined for the mode, worker_index selects the config
+        entry (falling back to entry 0 when index is None or out of range).
+        """
         if not self.sglang_config:
             return {}
 
         if mode == "prefill":
+            groups = self.sglang_config.prefill_groups
+            if groups:
+                idx = worker_index if worker_index is not None and worker_index < len(groups) else 0
+                return dict(groups[idx])
             return dict(self.sglang_config.prefill or {})
         elif mode == "decode":
+            groups = self.sglang_config.decode_groups
+            if groups:
+                idx = worker_index if worker_index is not None and worker_index < len(groups) else 0
+                return dict(groups[idx])
             return dict(self.sglang_config.decode or {})
         elif mode == "agg":
             return dict(self.sglang_config.aggregated or {})
@@ -133,7 +151,11 @@ class SGLangProtocol:
     def get_served_model_name(self, default: str) -> str:
         """Get served model name from SGLang config, or return default."""
         if self.sglang_config:
-            for cfg in [self.sglang_config.prefill, self.sglang_config.aggregated, self.sglang_config.decode]:
+            candidates = [self.sglang_config.prefill, self.sglang_config.aggregated, self.sglang_config.decode]
+            for groups in [self.sglang_config.prefill_groups, self.sglang_config.decode_groups]:
+                if groups:
+                    candidates.extend(groups)
+            for cfg in candidates:
                 if cfg:
                     name = cfg.get("served-model-name") or cfg.get("served_model_name")
                     if name:
@@ -227,7 +249,7 @@ class SGLangProtocol:
         from srtctl.core.slurm import get_hostname_ip
 
         mode = process.endpoint_mode
-        config = self.get_config_for_mode(mode)
+        config = self.get_config_for_mode(mode, worker_index=process.endpoint_index)
 
         # Determine if multi-node
         endpoint_nodes = list(dict.fromkeys(p.node for p in endpoint_processes))

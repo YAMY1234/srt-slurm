@@ -232,7 +232,7 @@ def render_sidebar(logs_dir, runs):
                     loader = RunLoader(logs_dir)
                     if loader.update_tags(run.metadata.path, new_tags):
                         st.success(f"Added tag: {tag_input}")
-                        components.load_data.clear()
+                        components.invalidate_data_cache(logs_dir)
                         st.rerun()
 
             # Display and manage existing tags
@@ -248,7 +248,7 @@ def render_sidebar(logs_dir, runs):
                             loader = RunLoader(logs_dir)
                             if loader.update_tags(run.metadata.path, new_tags):
                                 st.success(f"Removed tag: {tag}")
-                                components.load_data.clear()
+                                components.invalidate_data_cache(logs_dir)
                                 st.rerun()
             else:
                 st.caption("No tags yet")
@@ -366,10 +366,23 @@ def main():
         st.error(f"Directory not found: {logs_dir}")
         return
 
-    # Load data (fingerprint auto-invalidates cache when new dirs are added)
-    with st.spinner("Loading benchmark data..."):
-        dir_fingerprint = components.get_logs_dir_fingerprint(logs_dir)
-        all_runs, skipped_runs = components.load_data(logs_dir, _dir_fingerprint=dir_fingerprint)
+    # Refresh button - only scan Lustre dirs when explicitly requested
+    force_refresh = st.sidebar.button(
+        "🔄 Refresh Data", help="Re-scan the logs directory for new runs (slow on Lustre)"
+    )
+
+    # Load data from session cache; only hits Lustre on first load or manual refresh
+    with st.spinner("Loading benchmark data (scanning directory)..."):
+        all_runs, skipped_runs, was_refreshed = components.load_data_cached(logs_dir, force_refresh=force_refresh)
+
+    if was_refreshed:
+        st.sidebar.success("Data refreshed!")
+    else:
+        import time
+
+        cached_ts = st.session_state.get(components._session_ts_key(logs_dir), 0)
+        age_min = (time.time() - cached_ts) / 60 if cached_ts else 0
+        st.sidebar.caption(f"📦 Using cached data ({age_min:.0f}m ago)")
 
     # Show warning if runs were skipped
     if skipped_runs:

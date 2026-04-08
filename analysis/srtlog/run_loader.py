@@ -181,6 +181,8 @@ class RunLoader:
     def _find_run_directories(self) -> list[str]:
         """Find all valid benchmark run directories in logs_dir.
 
+        Uses os.scandir() to minimize Lustre metadata round-trips.
+
         Returns:
             List of absolute paths to run directories
         """
@@ -190,27 +192,21 @@ class RunLoader:
             logger.error(f"Logs directory does not exist: {self.logs_dir}")
             return paths
 
-        for entry in os.listdir(self.logs_dir):
-            # Skip hidden directories and files
-            if entry.startswith("."):
-                continue
-            # Skip common non-job directories
-            if entry in ["utils", "__pycache__", "venv", ".venv"]:
-                continue
-            # Skip Python files
-            if ".py" in entry:
-                continue
+        skip_names = {"utils", "__pycache__", "venv", ".venv"}
+        with os.scandir(self.logs_dir) as entries:
+            for entry in entries:
+                if entry.name.startswith(".") or entry.name in skip_names:
+                    continue
+                if ".py" in entry.name:
+                    continue
+                if not entry.is_dir(follow_symlinks=False):
+                    continue
 
-            full_path = os.path.join(self.logs_dir, entry)
-            if not os.path.isdir(full_path):
-                continue
+                job_id = self.extract_job_id_from_dirname(entry.name)
+                if not job_id.isdigit():
+                    continue
 
-            # Only include directories that start with a numeric job ID
-            job_id = self.extract_job_id_from_dirname(entry)
-            if not job_id.isdigit():
-                continue
-
-            paths.append(full_path)
+                paths.append(entry.path)
 
         return paths
 
@@ -254,15 +250,11 @@ class RunLoader:
         profiler_type = run.profiler.profiler_type
         pattern_strs = [f"{profiler_type}_isl_{run.profiler.isl}_osl_{run.profiler.osl}"]
 
-        # Define source patterns for cache validation
-        # Include both direct and logs/ subdirectory paths since results could be in either
-        source_patterns = []
-        for pattern in pattern_strs:
-            source_patterns.append(f"{pattern}/*.json")
-            source_patterns.append(f"logs/{pattern}/*.json")
+        # Sentinel: benchmark.out size change means new concurrency results appeared
+        sentinel = "logs/benchmark.out" if os.path.exists(os.path.join(run_path, "logs", "benchmark.out")) else None
 
         # Try to load from cache first
-        if cache_mgr.is_cache_valid("benchmark_results", source_patterns):
+        if cache_mgr.is_cache_valid("benchmark_results", sentinel=sentinel):
             cached_df = cache_mgr.load_from_cache("benchmark_results")
             if cached_df is not None and not cached_df.empty:
                 # Populate run.profiler from cached DataFrame - load all available columns
@@ -355,7 +347,7 @@ class RunLoader:
                                         cache_data[cache_key] = results[result_key]
 
                                 cache_df = pd.DataFrame(cache_data)
-                                cache_mgr.save_to_cache("benchmark_results", cache_df, source_patterns)
+                                cache_mgr.save_to_cache("benchmark_results", cache_df, sentinel=sentinel)
 
                             return  # Found results, stop searching
 

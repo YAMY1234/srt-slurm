@@ -35,6 +35,21 @@ class RunMetadata:
     agg_nodes: int = 0
     agg_workers: int = 0
 
+    def __post_init__(self):
+        """Coerce None values to safe defaults for numeric/string fields."""
+        for fld_name, default in [
+            ("prefill_nodes", 0),
+            ("decode_nodes", 0),
+            ("prefill_workers", 0),
+            ("decode_workers", 0),
+            ("gpus_per_node", 0),
+            ("num_additional_frontends", 0),
+            ("agg_nodes", 0),
+            ("agg_workers", 0),
+        ]:
+            if getattr(self, fld_name) is None:
+                object.__setattr__(self, fld_name, default)
+
     @classmethod
     def from_json(cls, json_data: dict, run_path: str) -> "RunMetadata":
         """Create from {jobid}.json metadata format.
